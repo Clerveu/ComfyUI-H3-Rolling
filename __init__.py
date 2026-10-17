@@ -100,7 +100,7 @@ class H3RollingRef2VA:
                 "audio_vae": ("VAE", {"tooltip": "Audio VAE"}),
                 "frames": ("IMAGE", {"tooltip": "Source frames at 24 fps (from H3 Rolling Source). Each chunk sees its own slice as <Video 1>."}),
                 "prompt": ("STRING", {"multiline": True, "default": DEFAULT_PROMPT,
-                                      "tooltip": "One prompt for every chunk. Tags: <Picture N> for pictures, <Video 1> for the source slice, <Audio 1> for its soundtrack (only if source audio is used as reference)."}),
+                                      "tooltip": "One prompt for every chunk. Tags: <Picture N> for pictures, <Video 1> for the source slice, <Audio 1> for its soundtrack (only if source audio is used as reference). With dialogue on, {dialogue} marks where each piece's own lines go."}),
                 "megapixels": ("FLOAT", {"default": 0.4, "min": 0.1, "max": 2.0, "step": 0.05,
                                          "tooltip": "Output size; aspect comes from the source. 0.4 = 864x480 at 16:9."}),
                 "chunk_seconds": ("FLOAT", {"default": 5.0, "min": 2.0, "max": 15.0, "step": 0.25,
@@ -141,6 +141,10 @@ class H3RollingRef2VA:
                                                   "tooltip": "Structure lock: only track and write output/h3_rolling/lock_preview_*.mp4 (tracked person in red | edge drawing), render nothing. Check it before a long run."}),
                 "lock_max_people": ("INT", {"default": 2, "min": 1, "max": 8,
                                             "tooltip": "Structure lock: how many matches of lock_track SAM3 may keep per window. SAM3 finds every match of the description, so with 1 it keeps only the best match; use 1 when there's only one person to replace."}),
+                "dialogue": (["off", "on", "preview only"], {"default": "off",
+                                                              "tooltip": "Transcribe the source audio (WhisperX, diarized, cached) and give every chunk and bridge only the lines spoken inside its own frames, as <d>[English] ...</d>. They go where {dialogue} is in the prompt, else at the end of detailed_description. 'preview only' transcribes, lists the speaker labels and each piece's lines, and renders nothing. Needs WhisperX (H3_WHISPER_PY) and HF_TOKEN."}),
+                "speakers": ("STRING", {"multiline": True, "default": "",
+                                        "tooltip": "Who each diarization label is, one per line: SPEAKER_00 = <Subject 1>, SPEAKER_01 = Data from <Video 1>. Map two labels to the same text if diarization split one voice. Add (voiceover) for an off-screen voice; '= ignore' leaves a label out. Run 'preview only' first to see the labels."}),
             },
             "optional": {
                 "audio": ("AUDIO", {"tooltip": "Source soundtrack (from H3 Rolling Source)"}),
@@ -158,7 +162,8 @@ class H3RollingRef2VA:
             sampler_name, scheduler, seed, ref_image_size, soundtrack, source_audio_as_reference,
             upscale_pass=False, upscale_megapixels=1.5, upscale_steps=2, upscale_denoise=0.4,
             handoff="bridge", bridge_frames="39", structure_lock=False, lock_track="person", lock_grow=40,
-            lock_strength=1.0, lock_preview_only=False, lock_max_people=2, audio=None, sampler=None, sigmas=None, picture_1=None, picture_2=None, picture_3=None, picture_4=None,
+            lock_strength=1.0, lock_preview_only=False, lock_max_people=2, dialogue="off", speakers="",
+            audio=None, sampler=None, sigmas=None, picture_1=None, picture_2=None, picture_3=None, picture_4=None,
             refmod_conditioning=None):
         importlib.reload(rolling_core)
         return rolling_core.run_rolling(
@@ -170,7 +175,8 @@ class H3RollingRef2VA:
             upscale_steps=upscale_steps, upscale_denoise=upscale_denoise,
             options={"handoff": handoff, "bridge_frames": int(bridge_frames), "structure_lock": structure_lock,
                      "lock_track": lock_track, "lock_grow": lock_grow, "lock_strength": lock_strength,
-                     "lock_preview_only": lock_preview_only, "lock_max_people": lock_max_people})
+                     "lock_preview_only": lock_preview_only, "lock_max_people": lock_max_people,
+                     "dialogue": dialogue, "speakers": speakers})
 
 
 NODE_CLASS_MAPPINGS = {

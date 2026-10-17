@@ -208,6 +208,265 @@ def _audio_slice(audio, f0, f1):
     return {"waveform": seg, "sample_rate": sr}
 
 
+# ---------------------------------------------------------------- per-chunk dialogue
+
+LANGUAGES = {"en": "English", "es": "Spanish", "fr": "French", "de": "German", "it": "Italian", "pt": "Portuguese",
+             "ja": "Japanese", "zh": "Chinese", "ko": "Korean", "ru": "Russian", "nl": "Dutch", "pl": "Polish"}
+
+
+def _whisper_python():
+    """The Python that has whisperx: H3_WHISPER_PY, else ComfyUI's own if whisperx is importable there."""
+    import importlib.util
+    import os
+    import sys
+    py = os.environ.get("H3_WHISPER_PY")
+    if py:
+        if not os.path.exists(py):
+            raise ValueError(f"H3_WHISPER_PY points at {py}, which doesn't exist")
+        return py
+    if importlib.util.find_spec("whisperx") is not None:
+        return sys.executable
+    raise ValueError("dialogue needs WhisperX: install whisperx into ComfyUI's Python, or set the H3_WHISPER_PY "
+                     "environment variable to a Python that has it (and HF_TOKEN for diarization), then restart ComfyUI")
+
+
+def transcribe(audio, language="en"):
+    """Diarized, word-level transcript of the selection's soundtrack. Times are seconds from the start of
+    the selection, so they line up with the frames. Cached by the audio itself in transcript_cache/."""
+    import hashlib
+    import json
+    import os
+    import subprocess
+    import tempfile
+    import wave
+
+    wf = audio["waveform"][0].float().mean(0)
+    sr = int(audio["sample_rate"])
+    try:
+        import torchaudio
+        mono = torchaudio.functional.resample(wf, sr, 16000) if sr != 16000 else wf
+    except ImportError:
+        mono = torch.nn.functional.interpolate(wf.view(1, 1, -1), size=int(wf.shape[-1] * 16000 / sr),
+                                               mode="linear", align_corners=False).view(-1)
+    n = mono.shape[-1]
+    pcm = (mono.clamp(-1, 1) * 32767).round().to(torch.int16).numpy().tobytes()
+    key = hashlib.sha1(pcm + language.encode()).hexdigest()[:20]
+    d = os.path.join(os.path.dirname(__file__), "transcript_cache")
+    os.makedirs(d, exist_ok=True)
+    path = os.path.join(d, key + ".json")
+    if os.path.exists(path):
+        print(f"[H3 Rolling] dialogue: transcript reused from cache ({key})")
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+
+    py = _whisper_python()
+    try:
+        import comfy.model_management as mm
+        mm.unload_all_models()
+        mm.soft_empty_cache()
+    except Exception:
+        pass
+    tmp = tempfile.mkdtemp(prefix="h3_whisper_")
+    wav, out = os.path.join(tmp, "audio.wav"), os.path.join(tmp, "out.json")
+    with wave.open(wav, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(pcm)
+    print(f"[H3 Rolling] dialogue: transcribing {n / 16000:.1f}s with WhisperX ({py})")
+    r = subprocess.run([py, os.path.join(os.path.dirname(__file__), "whisper_worker.py"), wav, out, language],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       creationflags=0x08000000 if os.name == "nt" else 0)
+    if r.returncode != 0 or not os.path.exists(out):
+        tail = "\n".join((r.stderr or r.stdout or "").strip().splitlines()[-15:])
+        raise RuntimeError(f"WhisperX failed (exit {r.returncode}):\n{tail}")
+    with open(out, encoding="utf-8") as f:
+        data = json.load(f)
+    os.replace(out, path)
+    try:
+        os.remove(wav)
+        os.rmdir(tmp)
+    except OSError:
+        pass
+    print(f"[H3 Rolling] dialogue: {len(data['words'])} words, "
+          f"{len({w['speaker'] for w in data['words']})} speaker label(s)")
+    return data
+
+
+def _secs(t):
+    """'12.5', '0:12.50' or '1:02:03' -> seconds."""
+    s = 0.0
+    for part in t.strip().split(":"):
+        s = s * 60 + float(part)
+    return s
+
+
+def parse_speakers(text):
+    """`SPEAKER_00 = <Subject 1>` per line. Add (voiceover) for an off-screen voice, or map a label to
+    `ignore` to leave it out (a TV in the background, crowd noise). A time range fixes diarization by
+    hand: `0:08.30-0:08.70 = SPEAKER_00` (or straight to a description) re-labels the words in it.
+    Returns (label -> description, [(t0, t1, label or description)])."""
+    import re
+    names, fixes = {}, []
+    rng = re.compile(r"^\s*([\d:.]+)\s*-\s*([\d:.]+)\s*=\s*(.+)$")
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        m = rng.match(line)
+        if m:
+            try:
+                fixes.append((_secs(m.group(1)), _secs(m.group(2)), m.group(3).strip()))
+            except ValueError:
+                pass
+            continue
+        if "=" in line:
+            k, v = line.split("=", 1)
+            names[k.strip().upper()] = v.strip()
+    return names, fixes
+
+
+def clean_speakers(words, fixes, names):
+    """Diarization flickers between voices inside one sentence ("not / drawing / much"): give every
+    sentence the voice that speaks most of it, then apply the hand-written time-range fixes. A fix that
+    names a description instead of a label becomes its own speaker. Returns new word dicts + names."""
+    import re
+    out = [dict(w) for w in words]
+    names = dict(names)
+    sent = []
+    for i, w in enumerate(out):
+        sent.append(i)
+        end = w["w"].rstrip("\"')]")[-1:] in ".?!"
+        gap = i + 1 < len(out) and out[i + 1]["start"] - w["end"] > 1.0
+        if end or gap or i + 1 == len(out):
+            dur = {}
+            for j in sent:
+                dur[out[j]["speaker"]] = dur.get(out[j]["speaker"], 0) + max(0.05, out[j]["end"] - out[j]["start"])
+            best = max(dur, key=dur.get)
+            for j in sent:
+                out[j]["speaker"] = best
+            sent = []
+    label = re.compile(r"^SPEAKER_\d+$", re.I)
+    for t0, t1, who in fixes:
+        if label.match(who):
+            tag = who.upper()
+        else:
+            tag = "FIX:" + who
+            names.setdefault(tag.upper(), who)
+        for w in out:
+            if t0 <= (w["start"] + w["end"]) / 2 < t1:
+                w["speaker"] = tag
+    return out, names
+
+
+def _who(label, speakers):
+    """(phrase, voiceover?, identity) for a diarization label, or None to leave its words out. Labels
+    mapped to the same phrase are one speaker (diarization often splits one voice in two); unmapped
+    labels stay apart from each other."""
+    v = speakers.get(label.upper())
+    if v is None:
+        return "a person", False, label
+    if v.lower() in ("ignore", "skip", "none", "-"):
+        return None
+    vo = False
+    for tag in ("(voiceover)", "(off-screen)", "(offscreen)"):
+        if v.lower().endswith(tag):
+            v, vo = v[:-len(tag)].strip(), True
+    return v, vo, v
+
+
+def _mid_sentence(a, b, join):
+    """Word b carries on word a's sentence: same voice, a doesn't end one, and b follows soon."""
+    return (a["speaker"] == b["speaker"] and a["w"].rstrip("\"')]")[-1:] not in ".?!"
+            and b["start"] - a["end"] < join)
+
+
+def dialogue_lines(words, t0, t1, speakers, join=1.5):
+    """The lines spoken inside [t0, t1): a word belongs to the piece its midpoint falls in. A line whose
+    sentence began before t0 'continues'; one still mid-sentence at t1 ends in <cutoff>. Returns dicts
+    (who, vo, key, text, cont, cut, start, end) in order."""
+    keep = [i for i, w in enumerate(words) if t0 <= (w["start"] + w["end"]) / 2 < t1]
+    lines = []
+    for i in keep:
+        w = words[i]
+        who = _who(w["speaker"], speakers)
+        if who is None:
+            continue
+        cur = lines[-1] if lines else None
+        if cur and cur["who"][2] == who[2]:
+            cur["words"].append(w["w"])
+            cur["end"], cur["last"] = w["end"], i
+            continue
+        cont = i > 0 and (words[i - 1]["start"] + words[i - 1]["end"]) / 2 < t0 and _mid_sentence(words[i - 1], w, join)
+        lines.append({"who": who, "words": [w["w"]], "start": w["start"], "end": w["end"], "last": i, "cont": cont})
+    for ln in lines:
+        j = ln["last"]
+        nxt = words[j + 1] if j + 1 < len(words) else None
+        if nxt is None:  # the selection ends here: a sentence still open was cut off by it
+            ln["cut"] = words[j]["w"].rstrip("\"')]")[-1:] not in ".?!"
+        else:
+            ln["cut"] = (nxt["start"] + nxt["end"]) / 2 >= t1 and _mid_sentence(words[j], nxt, join)
+        ln["text"] = " ".join(ln.pop("words"))
+        ln["who"], ln["vo"], ln["key"] = ln["who"]
+        del ln["last"]
+    return lines
+
+
+def dialogue_block(lines, language="English"):
+    """Prompt sentences for one piece, speakers numbered (S1), (S2)... by first vocal event in it."""
+    ids, out = {}, []
+    for ln in lines:
+        sid = ids.setdefault(ln["key"], len(ids) + 1)
+        text = ln["text"].strip()
+        if ln["cut"]:
+            text = text.rstrip(",;:-") + " <cutoff>"
+        elif text and text[-1] not in ".?!":
+            text = text.rstrip(",;:-") + "."
+        verb = "continues" if ln["cont"] else "says"
+        if ln["vo"]:
+            out.append(f"{ln['who']} (S{sid}) {verb} in an off-screen voiceover: <d>[{language}] {text}</d> "
+                       f"while their lips remain completely closed.")
+        else:
+            out.append(f"{ln['who']} (S{sid}) {verb}, <d>[{language}] {text}</d>")
+    return " ".join(out)
+
+
+def prompt_with_dialogue(prompt, block):
+    """Put a piece's dialogue where {dialogue} is in the prompt, else at the end of detailed_description
+    (just before overall_soundscape), else at the very end."""
+    import re
+    if "{dialogue}" in prompt:
+        out = prompt.replace("{dialogue}", block)
+        return re.sub(r"[ \t]{2,}", " ", out).replace(" \n", "\n")
+    if not block:
+        return prompt
+    m = re.search(r"\n\s*overall_soundscape:", prompt)
+    if m:
+        head = prompt[:m.start()].rstrip()
+        return f"{head} {block}{prompt[m.start():]}"
+    return prompt.rstrip() + " " + block
+
+
+def speaker_summary(words, speakers):
+    """One line per diarization label: how much it says, its first words, and what it's mapped to."""
+    by = {}
+    for w in words:
+        s = by.setdefault(w["speaker"], {"n": 0, "first": w["start"], "sample": []})
+        s["n"] += 1
+        if len(s["sample"]) < 12:
+            s["sample"].append(w["w"])
+    rows = []
+    for lab, s in sorted(by.items(), key=lambda kv: kv[1]["first"]):
+        m = speakers.get(lab.upper())
+        tgt = f"-> {m}" if m else "-> NOT MAPPED (written as 'a person')"
+        rows.append(f"  {lab}: {s['n']} words, first at {_ts(s['first'])}: \"{' '.join(s['sample'])}...\"  {tgt}")
+    return "\n".join(rows)
+
+
+def _ts(t):
+    return f"{int(t // 60)}:{t % 60:05.2f}"
+
+
 class FrameSink:
     """Assembles the output video. Normal mode: one float32 [F,H,W,3] buffer, returned as IMAGE.
     Stream mode (output too big for RAM): frames that can no longer change are encoded straight to
@@ -722,6 +981,48 @@ def run_rolling(model, clip, vae, audio_vae, frames, prompt, megapixels, chunk_s
         plan += f" | upscale to {upscale_megapixels} MP with {up_model}, {upscale_steps} steps @ {upscale_denoise}"
     if refmod_blocks:
         plan += f" | {len(refmod_blocks)} RefMod block(s) on every chunk"
+
+    # per-piece dialogue: each chunk and bridge gets only the words spoken inside its own frames
+    dialogue = lab.get("dialogue", opts.get("dialogue", "off"))
+    chunk_prompts, bridge_prompts = [prompt] * len(starts), [prompt] * len(bridges)
+    if dialogue != "off":
+        if audio is None:
+            raise ValueError("dialogue needs the source audio (connect H3 Rolling Source's audio output)")
+        lang_code = lab.get("dialogue_language", "en")
+        tr = transcribe(audio, lang_code)
+        lang = LANGUAGES.get(tr.get("language", lang_code), "English")
+        speakers, fixes = parse_speakers(opts.get("speakers", ""))
+        words, speakers = clean_speakers(tr["words"], fixes, speakers)
+        rows = []
+
+        def piece(name, f0, n):
+            f1 = min(f0 + n, F)
+            block = dialogue_block(dialogue_lines(words, f0 / FPS, f1 / FPS, speakers), lang)
+            rows.append(f"{name} {_ts(f0 / FPS)}-{_ts(f1 / FPS)}: {block or '(no dialogue)'}")
+            return prompt_with_dialogue(prompt, block)
+
+        chunk_prompts = [piece(f"chunk {k + 1}", s, lens[k]) for k, s in enumerate(starts)]
+        bridge_prompts = [piece(f"bridge {j + 1}", b0, bl) for j, (b0, bl, _) in enumerate(bridges)]
+        order = sorted([(s, r) for s, r in zip(starts, rows[:len(starts)])]
+                       + [(b0, r) for (b0, _, _), r in zip(bridges, rows[len(starts):])])
+        report = ("dialogue: speaker labels (map them in the speakers box, e.g. SPEAKER_00 = <Subject 1>):\n"
+                  + speaker_summary(words, speakers) + "\n\ndialogue per piece (times from the start of the selection):\n"
+                  + "\n".join(r for _, r in order))
+        print(f"[H3 Rolling] {report}")
+        if dialogue == "preview only":
+            import os
+            import time
+            import folder_paths
+            d = os.path.join(folder_paths.get_output_directory(), "h3_rolling")
+            os.makedirs(d, exist_ok=True)
+            path = os.path.join(d, time.strftime("dialogue_%Y%m%d_%H%M%S.txt"))
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(plan + "\n\n" + report + "\n\nfirst chunk's full prompt:\n" + chunk_prompts[0] + "\n")
+            print(f"[H3 Rolling] dialogue preview only: nothing rendered, written to {path}")
+            return frames, audio, plan + "\n" + report
+        unmapped = sorted({w["speaker"].upper() for w in words} - set(speakers))
+        plan += f" | per-piece dialogue ({len(words)} words)" + (f", unmapped: {', '.join(unmapped)}" if unmapped else "")
+
     lock = None
     if opts.get("structure_lock"):
         lock = {"track": opts.get("lock_track") or "person", "grow": opts.get("lock_grow", 40),
@@ -755,7 +1056,7 @@ def run_rolling(model, clip, vae, audio_vae, frames, prompt, megapixels, chunk_s
     print(f"[H3 Rolling] {plan}")
 
     # 1) encode every chunk's conditioning up front so the text encoder loads once
-    def encode(s, Lk):
+    def encode(s, Lk, piece_prompt):
         ref_audio = None
         if audio is not None and source_audio_as_reference:
             ref_audio = _audio_slice(audio, s, s + Lk)
@@ -765,7 +1066,7 @@ def run_rolling(model, clip, vae, audio_vae, frames, prompt, megapixels, chunk_s
         if ref_vid.shape[0] < Lk:  # short last chunk rounded up to 17k+5: hold the last frame
             ref_vid = torch.cat([ref_vid, ref_vid[-1:].expand(Lk - ref_vid.shape[0], -1, -1, -1)])
         out = MiniMaxH3ReferenceToVideo.execute(
-            clip=clip, prompt=prompt, width=w, height=h, length=Lk, ref_image_size=ref_image_size,
+            clip=clip, prompt=piece_prompt, width=w, height=h, length=Lk, ref_image_size=ref_image_size,
             vae=vae, audio_vae=audio_vae, ref_images=ref_images,
             ref_videos={"ref_video_1": ref_vid},
             ref_video_audios={"ref_video_audio_1": ref_audio} if ref_audio else None)
@@ -777,12 +1078,12 @@ def run_rolling(model, clip, vae, audio_vae, frames, prompt, megapixels, chunk_s
 
     conds = []
     for k, s in enumerate(starts):
-        conds.append(encode(s, lens[k]))
+        conds.append(encode(s, lens[k], chunk_prompts[k]))
         print(f"[H3 Rolling] encoded chunk {k + 1}/{len(starts)}")
         _mark(f"encode chunk {k + 1}")
     bconds = []
     for j, (b0, bl, _) in enumerate(bridges):
-        bconds.append(encode(b0, bl))
+        bconds.append(encode(b0, bl, bridge_prompts[j]))
         _mark(f"encode bridge {j + 1}")
 
     # 2) render chunk by chunk, each pinned to the tail of what's already rendered
