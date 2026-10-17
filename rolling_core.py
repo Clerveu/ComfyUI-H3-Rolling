@@ -282,12 +282,11 @@ def transcribe(audio, language="en"):
         raise RuntimeError(f"WhisperX failed (exit {r.returncode}):\n{tail}")
     with open(out, encoding="utf-8") as f:
         data = json.load(f)
-    os.replace(out, path)
-    try:
-        os.remove(wav)
-        os.rmdir(tmp)
-    except OSError:
-        pass
+    with open(path + ".tmp", "w", encoding="utf-8") as f:  # temp dir may be on another drive: write, don't move
+        json.dump(data, f)
+    os.replace(path + ".tmp", path)
+    import shutil
+    shutil.rmtree(tmp, ignore_errors=True)
     print(f"[H3 Rolling] dialogue: {len(data['words'])} words, "
           f"{len({w['speaker'] for w in data['words']})} speaker label(s)")
     return data
