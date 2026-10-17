@@ -212,7 +212,9 @@ class FrameSink:
     """Assembles the output video. Normal mode: one float32 [F,H,W,3] buffer, returned as IMAGE.
     Stream mode (output too big for RAM): frames that can no longer change are encoded straight to
     an mp4 as soon as each chunk lands, only the still-open tail stays in memory, and the node
-    returns a small proxy video (240p) so the graph still has something to show."""
+    returns a small proxy video (240p) so the graph still has something to show.
+    In stream mode the tail is a list of uint8 frames: growing it appends frames and flushing drops
+    them, so nothing ever copies the whole tail (the old fp16 tensor + torch.cat doubled it)."""
 
     PROXY_SHORT = 240
 
@@ -225,7 +227,7 @@ class FrameSink:
         else:
             import subprocess
             import shutil
-            self.buf = torch.zeros((0, self.H, self.W, 3), dtype=torch.float16)
+            self.frames = []
             self.proxy = []
             self.tmp = stream_path[:-4] + ".video.mp4"
             exe = shutil.which("ffmpeg")
@@ -238,41 +240,53 @@ class FrameSink:
                  "-pix_fmt", "yuv420p", self.tmp],
                 stdin=subprocess.PIPE)
 
+    @staticmethod
+    def _u8(x):
+        return (x.float().clamp(0, 1) * 255).round().to(torch.uint8)
+
     def _ensure(self, end):
+        if self.path is None:
+            return
         end = min(end, self.F)
-        have = self.p0 + self.buf.shape[0]
-        if end > have:
-            pad = torch.zeros((end - have, self.H, self.W, 3), dtype=self.buf.dtype)
-            self.buf = torch.cat([self.buf, pad])
+        while self.p0 + len(self.frames) < end:
+            self.frames.append(torch.zeros((self.H, self.W, 3), dtype=torch.uint8))
 
     def get(self, a, b):
-        return self.buf[a - self.p0:b - self.p0].float()
+        if self.path is None:
+            return self.buf[a:b].float()
+        return torch.stack(self.frames[a - self.p0:b - self.p0]).float() / 255
 
     def place(self, k, s, seg, ov):
-        self._ensure(s + seg.shape[0])
+        n = min(seg.shape[0], self.F - s)
+        b = 0 if k == 0 else min(ov, n)
+        wts = torch.linspace(0, 1, b + 2)[1:-1].view(-1, 1, 1, 1)
+        if self.path is None:
+            if b:
+                self.buf[s:s + b] = self.buf[s:s + b] * (1 - wts) + seg[:b].float() * wts
+            self.buf[s + b:s + n] = seg[b:n]
+            return
+        self._ensure(s + n)
         o = s - self.p0
-        seg = seg.to(self.buf.dtype)
-        if k == 0:
-            self.buf[o:o + seg.shape[0]] = seg
-        else:
-            b = min(ov, seg.shape[0])
-            wts = torch.linspace(0, 1, b + 2)[1:-1].view(-1, 1, 1, 1)
-            self.buf[o:o + b] = (self.buf[o:o + b].float() * (1 - wts) + seg[:b].float() * wts).to(self.buf.dtype)
-            self.buf[o + b:o + seg.shape[0]] = seg[b:]
+        if b:
+            mixed = self.get(s, s + b) * (1 - wts) + seg[:b].float() * wts
+            for i in range(b):
+                self.frames[o + i] = self._u8(mixed[i])
+        for i in range(b, n):
+            self.frames[o + i] = self._u8(seg[i])
 
     def flush(self, upto):
         """Stream mode: frames before `upto` are final; encode them and drop them from RAM."""
         if self.path is None or upto <= self.p0:
             return
         n = upto - self.p0
-        done = self.buf[:n].float()
+        s = self.PROXY_SHORT / min(self.H, self.W)
+        ph, pw = max(2, round(self.H * s / 2) * 2), max(2, round(self.W * s / 2) * 2)
         for i in range(0, n, 16):
-            blk = done[i:i + 16]
-            self.proc.stdin.write((blk.clamp(0, 1) * 255).round().to(torch.uint8).numpy().tobytes())
-            s = self.PROXY_SHORT / min(self.H, self.W)
-            ph, pw = max(2, round(self.H * s / 2) * 2), max(2, round(self.W * s / 2) * 2)
-            self.proxy.append(torch.nn.functional.interpolate(blk.movedim(-1, 1), size=(ph, pw), mode="area").movedim(1, -1))
-        self.buf = self.buf[n:].clone()
+            blk = torch.stack(self.frames[i:min(i + 16, n)])
+            self.proc.stdin.write(blk.numpy().tobytes())
+            small = torch.nn.functional.interpolate(blk.movedim(-1, 1).float() / 255, size=(ph, pw), mode="area")
+            self.proxy.append(self._u8(small.movedim(1, -1)))
+        self.frames = self.frames[n:]
         self.p0 = upto
 
     def finish(self, audio):
@@ -304,7 +318,7 @@ class FrameSink:
             import os
             os.replace(self.tmp, self.path)
         print(f"[H3 Rolling] full-resolution video written to {self.path}")
-        return torch.cat(self.proxy)
+        return torch.cat(self.proxy).float() / 255
 
 
 def _stream_path(lab, F, H, W):
@@ -911,6 +925,7 @@ def _render_bridged(c):
             st["audio"] = torch.zeros((1, wf.shape[1], round(F / FPS * sr)), dtype=torch.float32)
         seg = imgs[:max(0, min(imgs.shape[0], r["len"], F - s))]
         st["sink"].place(1 if blend else 0, s, seg, fade)
+        del imgs, seg  # the decoded chunk is the biggest thing in RAM; drop it before the audio work
         out = st["audio"]
         spf = st["sr"] / FPS
         a0 = round(s * spf)
