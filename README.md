@@ -79,6 +79,15 @@ Independent chunks can disagree on framing. If the source camera slowly pushes i
 - `lock_preview_only`: tracks and writes `output/h3_rolling/lock_preview_<time>.mp4` (tracked person in red next to the edge map), then stops. Worth checking before a long render. The console also prints a list of moments where tracking looked shaky.
 - Costs about 30% slower sampling, plus a few minutes of tracking. Tracking results are cached, so re-renders of the same clip skip it.
 
+### Per-chunk dialogue
+H3 prompts carry the spoken lines as `<d>[English] ...</d>`, but one prompt for a 70 second clip would hand every 5 second chunk the whole conversation. With `dialogue` on, the node transcribes the source soundtrack (WhisperX, word timestamps, speaker diarization) and gives every chunk and every bridge only the words spoken inside its own frames. A sentence that started before the piece "continues", one still going at the end gets `<cutoff>`, and speakers are numbered (S1), (S2) by who talks first in each piece.
+
+- `dialogue = preview only` first: it transcribes, prints the speaker labels with their first words and every piece's lines (also written to `output/h3_rolling/dialogue_<time>.txt`), and renders nothing.
+- `speakers`: say who each label is, one per line: `SPEAKER_00 = <Subject 1>`, `SPEAKER_01 = the older man from <Video 1>`. Map two labels to the same text if diarization split one voice. `(voiceover)` at the end makes it an off-screen voice; `= ignore` leaves a label out.
+- Diarization gets quick back-and-forth wrong (a two-word reply glued onto the other person). The node already gives each sentence the voice that speaks most of it; fix the rest by time from the preview: `0:08.30-0:08.70 = SPEAKER_00` (times from the start of your selection).
+- The lines go where `{dialogue}` is in your prompt, or else at the end of `detailed_description`.
+- Needs WhisperX somewhere: either installed in ComfyUI's Python, or set the `H3_WHISPER_PY` environment variable to a Python that has it. Diarization needs `HF_TOKEN` (pyannote). The transcript is cached in `transcript_cache/`, so re-runs and speaker edits are instant. Models are unloaded before transcribing.
+
 ### Upscale pass
 `upscale_pass` upscales each chunk in latent space with the H3 latent upscaler and gives it a short polish at the bigger size before the next chunk is pinned to it. This needs the **Minimax H3 Latent Upscaler** node pack and its 3D upscaler model, and it only works with that upscaler, since it happens inside the render. Any normal video upscaler still works on the finished mp4 afterwards.
 
