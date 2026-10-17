@@ -11,7 +11,7 @@ This node proves out a different approach: **never chain**. Every chunk is rende
 The degradation part is solved. The seams are mostly solved, but not completely:
 
 - **Works well:** one subject who stays in frame, with a fairly steady camera.
-- **Still rough:** the subject leaving or entering frame, several people (especially similar-looking ones), and big fast moves like a head turn that happen to land right on a seam.
+- **Still rough:** the subject leaving or entering frame, crowds and several similar-looking people (structure lock's tracking handoff helps a lot here, but it isn't bulletproof), and big fast moves like a head turn that happen to land right on a seam.
 - **Known H3 behavior:** H3 follows a pin at the *start* of a clip smoothly, but treats a pin at the *end* like a deadline. A bridge tends to hold the first chunk's take and then snap into the second one right before the seam. Most seams look fine. Some show a small jump.
 
 On our 70 second test clip with structure lock on (see below), 8 of 10 seams were close to invisible and the two that weren't were head turns.
@@ -75,6 +75,7 @@ Independent chunks can disagree on framing. If the source camera slowly pushes i
 - `lock_track`: who to track, in plain words ("man", "woman in red").
 - `lock_grow`: slack around the tracked person, so the new character can be a different shape.
 - `lock_max_people`: how many matches SAM3 may keep. Use 1 when there's only one person to replace.
+- Tracking runs in 5 second windows. Each window starts from the people the previous window ended on, so it keeps following the same person through a crowd instead of picking again from everyone the description matches. If a window loses its person for the last half second or more (a cut, someone walking out of frame), that stretch is tracked again fresh. The console prints how well each window lines up with the one before it.
 - `lock_preview_only`: tracks and writes `output/h3_rolling/lock_preview_<time>.mp4` (tracked person in red next to the edge map), then stops. Worth checking before a long render. The console also prints a list of moments where tracking looked shaky.
 - Costs about 30% slower sampling, plus a few minutes of tracking. Tracking results are cached, so re-renders of the same clip skip it.
 

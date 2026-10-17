@@ -363,30 +363,70 @@ def _build_control(frames, lock):
 
     # SAM3 loses people over long runs and doesn't pick them back up, so track in short windows that
     # each start with a fresh detection; a lost track then only stays lost until the next window.
-    # Windows are independent, so each one is cached by its pixels + settings: a preview of the first
-    # part of a range is reused by the full run, and a rerun with only grow/strength changed skips SAM3.
+    # Handoff: each window after the first starts one frame early, on the last frame of the window
+    # before, with that frame's per-person masks as SAM3's initial masks, so it keeps following the
+    # same people instead of choosing again from everything the text matches (crowds).
+    # A track that dies (a cut, someone walking out) keeps its slot, so SAM3 can't pick anyone up
+    # again inside that window: when a window ends with half a second or more of nobody, that stretch
+    # is tracked again fresh from the frame the person was lost, and fills in wherever it finds someone.
+    # Windows are cached by their pixels + settings + the incoming handoff.
     win = int(lock.get("window", 120))
-    masks, hits = [], 0
+    carry_on = bool(lock.get("carry", True))
+    settings = f"{sam_ckpt}|{track_text}|{threshold}|{max_objects}|refill"
+    refill_min = int(lock.get("refill_frames", 12))
+
+    def track(clip, init=None):
+        if not sam:
+            sam_model, sam_clip = nodes.CheckpointLoaderSimple().load_checkpoint(sam_ckpt)[:2]
+            sam.extend([sam_model, nodes.CLIPTextEncode().encode(sam_clip, track_text)[0]])
+        t = first(SAM3_VideoTrack.execute(images=clip, model=sam[0], conditioning=sam[1], initial_mask=init,
+                                          detection_threshold=threshold, max_objects=max_objects,
+                                          detect_interval=1))
+        m = first(SAM3_TrackToMask.execute(track_data=t, object_indices="")).cpu().float()
+        if m.shape[0] != clip.shape[0]:
+            raise RuntimeError(f"SAM3 returned {m.shape[0]} masks for {clip.shape[0]} frames")
+        return m, _last_people(t)
+
+    masks, hits, carried, refilled = [], 0, 0, 0
+    carry = None
     for a in range(0, frames.shape[0], win):
         clip = frames[a:a + win]
-        key = _mask_key(clip, f"{sam_ckpt}|{track_text}|{threshold}|{max_objects}")
+        handoff = carry_on and a > 0 and carry is not None and carry.shape[0] > 0
+        if handoff:
+            import hashlib
+            ckey = hashlib.sha1(carry.numpy().tobytes()).hexdigest()[:16]
+            key = _mask_key(frames[a - 1:a + win], f"{settings}|carry {ckey}")
+        else:
+            key = _mask_key(clip, settings)
         m = _mask_cache_get(key, clip.shape[:3])
-        if m is not None:
+        nxt = _carry_cache_get(key) if m is not None else None
+        if m is not None and (nxt is not None or not carry_on):
             hits += 1
         else:
-            if not sam:
-                sam_model, sam_clip = nodes.CheckpointLoaderSimple().load_checkpoint(sam_ckpt)[:2]
-                sam.extend([sam_model, nodes.CLIPTextEncode().encode(sam_clip, track_text)[0]])
-            track = first(SAM3_VideoTrack.execute(images=clip, model=sam[0], conditioning=sam[1],
-                                                  detection_threshold=threshold, max_objects=max_objects,
-                                                  detect_interval=1))
-            m = first(SAM3_TrackToMask.execute(track_data=track, object_indices="")).cpu().float()
-            if m.shape[0] != clip.shape[0]:
-                raise RuntimeError(f"SAM3 returned {m.shape[0]} masks for {clip.shape[0]} frames")
+            if handoff:
+                m, nxt = track(frames[a - 1:a + win], carry)
+                m = m[1:]
+                carried += 1
+            else:
+                m, nxt = track(clip)
+            empty = m.flatten(1).amax(1) <= 0.5
+            e = m.shape[0]
+            while e > 0 and bool(empty[e - 1]):
+                e -= 1
+            if m.shape[0] - e >= refill_min and e > 0:
+                fm, fnxt = track(clip[e:])
+                m[e:] = torch.where(empty[e:].view(-1, 1, 1), fm, m[e:])
+                nxt = fnxt
+                refilled += 1
             _mask_cache_put(key, m)
+            _carry_cache_put(key, nxt)
+        carry = nxt
         masks.append(m)
     n_win = len(masks)
-    print(f"[H3 Rolling] structure lock: {hits} of {n_win} tracking windows reused from cache, {n_win - hits} tracked")
+    print(f"[H3 Rolling] structure lock: {hits} of {n_win} tracking windows reused from cache, {n_win - hits} tracked"
+          + ((f" ({carried} handed off from the window before" if carried else " (")
+             + (f", {refilled} re-tracked after losing the person)" if refilled else ")")
+             if carried or refilled else ""))
     mask = torch.cat(masks)
     checks, flagged = _mask_checks(mask, win)
     lost = int((mask.flatten(1).amax(1) == 0).sum())
@@ -449,6 +489,33 @@ def _mask_cache_put(key, m, budget=4 * 2**30):
         os.remove(f)
 
 
+def _last_people(track_data):
+    """Per-person masks on the last frame of a SAM3 track, [K, h, w] uint8 (people present only)."""
+    from comfy.ldm.sam3.tracker import unpack_masks
+    packed = track_data.get("packed_masks")
+    if packed is None:
+        return torch.zeros((0, 1, 1), dtype=torch.uint8)
+    last = unpack_masks(packed[-1]).cpu()
+    keep = last.flatten(1).any(1)
+    return last[keep].to(torch.uint8)
+
+
+def _carry_cache_get(key):
+    import os
+    try:
+        return torch.from_numpy(np.load(os.path.join(_mask_cache_dir(), key + ".carry.npz"))["c"])
+    except (OSError, KeyError, ValueError):
+        return None
+
+
+def _carry_cache_put(key, c):
+    import os
+    d = _mask_cache_dir()
+    tmp = os.path.join(d, key + ".carry.tmp.npz")
+    np.savez_compressed(tmp, c=c.numpy())
+    os.replace(tmp, os.path.join(d, key + ".carry.npz"))
+
+
 def _mask_checks(mask, win):
     """Spots in the tracked mask worth a look: nobody found, the size or position jumping between two
     frames (a cut, an occlusion, or SAM3 grabbing someone else), and window starts where the fresh
@@ -484,6 +551,17 @@ def _mask_checks(mask, win):
             flag(i, "mask size jumps")
         elif jump > 0.12:
             flag(i, "mask jumps across the frame")
+    # how well each window restart lines up with the frame before it (1.0 = same silhouette)
+    seam_iou = []
+    for i in range(win, n, win):
+        if cov[i - 1] > 0 and cov[i] > 0:
+            seam_iou.append((float((b[i - 1] & b[i]).sum()) / max(1.0, float((b[i - 1] | b[i]).sum())), i))
+    if seam_iou:
+        vals = sorted(v for v, _ in seam_iou)
+        worst = min(seam_iou)
+        print(f"[H3 Rolling] structure lock: {len(seam_iou)} window seams, overlap median {vals[len(vals) // 2]:.3f}, "
+              f"worst {worst[0]:.3f} at {int(worst[1] / FPS // 60)}:{worst[1] / FPS % 60:05.2f}; "
+              f"all: {' '.join(f'{v:.2f}' for v, _ in seam_iou)}")
     flagged = sorted(reason)
     spans = []
     for i in flagged:
