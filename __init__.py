@@ -145,6 +145,8 @@ class H3RollingRef2VA:
                                                               "tooltip": "Transcribe the source audio (WhisperX, diarized, cached) and give every chunk and bridge only the lines spoken inside its own frames, as <d>[English] ...</d>. They go where {dialogue} is in the prompt, else at the end of detailed_description. 'preview only' transcribes, lists the speaker labels and each piece's lines, and renders nothing. Needs WhisperX (H3_WHISPER_PY) and HF_TOKEN."}),
                 "speakers": ("STRING", {"multiline": True, "default": "",
                                         "tooltip": "Who each diarization label is, one per line: SPEAKER_00 = <Subject 1>, SPEAKER_01 = Data from <Video 1>. Map two labels to the same text if diarization split one voice. Add (voiceover) for an off-screen voice; '= ignore' leaves a label out. Run 'preview only' first to see the labels."}),
+                "pin_mode": (["keyframe", "mask"], {"default": "keyframe",
+                                                    "tooltip": "How a bridge holds the frames it shares with its two chunks (bridge hand-off only). keyframe: passed as H3 keyframe guides, and the bridge draws its own copy of them. mask: the chunks' real latents are written into the bridge itself and masked off, so the sampler keeps them and they decode as the originals (roycho87's Clown Context / Clown Anchoring method)."}),
             },
             "optional": {
                 "audio": ("AUDIO", {"tooltip": "Source soundtrack (from H3 Rolling Source)"}),
@@ -163,7 +165,7 @@ class H3RollingRef2VA:
             upscale_pass=False, upscale_megapixels=1.5, upscale_steps=2, upscale_denoise=0.4,
             handoff="bridge", bridge_frames="39", structure_lock=False, lock_track="person", lock_grow=40,
             lock_strength=1.0, lock_preview_only=False, lock_max_people=2, dialogue="off", speakers="",
-            audio=None, sampler=None, sigmas=None, picture_1=None, picture_2=None, picture_3=None, picture_4=None,
+            pin_mode="keyframe", audio=None, sampler=None, sigmas=None, picture_1=None, picture_2=None, picture_3=None, picture_4=None,
             refmod_conditioning=None):
         importlib.reload(rolling_core)
         return rolling_core.run_rolling(
@@ -176,7 +178,7 @@ class H3RollingRef2VA:
             options={"handoff": handoff, "bridge_frames": int(bridge_frames), "structure_lock": structure_lock,
                      "lock_track": lock_track, "lock_grow": lock_grow, "lock_strength": lock_strength,
                      "lock_preview_only": lock_preview_only, "lock_max_people": lock_max_people,
-                     "dialogue": dialogue, "speakers": speakers})
+                     "dialogue": dialogue, "speakers": speakers, "pin_mode": pin_mode})
 
 
 NODE_CLASS_MAPPINGS = {

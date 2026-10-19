@@ -173,7 +173,7 @@ def plan_bridged(F, L, Bl, pin=5, pin_end=5):
         nxt = starts[-1] + step
         if nxt + pin_end + 12 > F:
             b0 = starts[-1] + L - pin
-            tail = (b0, align(max(F - b0, 22)), False)
+            tail = (b0, align(max(F - b0, pin + 17)), False)
             break
         starts.append(nxt)
     lens = [L] * len(starts)
@@ -695,7 +695,8 @@ def _build_control(frames, lock):
     edges = torch.cat([first(Canny.execute(image=frames[i:i + 64], low_threshold=lo, high_threshold=hi)).cpu()
                        for i in range(0, frames.shape[0], 64)])
     m = mask.cpu().float().clamp(0, 1)
-    ctrl = edges * (1.0 - m).unsqueeze(-1)
+    hole = float(lock.get("hole", 0.0))  # share of the source's own edges left inside the silhouette (0 = blank)
+    ctrl = edges * (1.0 - m * (1.0 - hole)).unsqueeze(-1)
     covered = float(m.mean())
     print(f"[H3 Rolling] structure lock: tracked '{lock.get('track', 'person')}', person mask covers "
           f"{covered * 100:.1f}% of the frame on average (grown {lock.get('grow', 40)} px)")
@@ -936,10 +937,11 @@ def run_rolling(model, clip, vae, audio_vae, frames, prompt, megapixels, chunk_s
     bridges = []
     BL = align(int(lab.get("bridge_frames", opts.get("bridge_frames", 39))))
     PE = align(int(lab.get("bridge_pin_end", 5)))
+    PS = align(int(lab.get("bridge_pin", 5)))  # frames of chunk A held at a bridge's start
     if handoff == "bridge":
-        if BL < PE + 17:
-            BL = align(PE + 17)
-        starts, lens, bridges = plan_bridged(F, L, BL, 5, PE)
+        if BL < PS + PE + 12:
+            BL = align(PS + PE + 12)
+        starts, lens, bridges = plan_bridged(F, L, BL, PS, PE)
     elif handoff in ("latent", "none") or lab.get("planner") == "aligned":
         starts, lens = plan_aligned(F, L, ov)
     else:
@@ -974,8 +976,8 @@ def run_rolling(model, clip, vae, audio_vae, frames, prompt, megapixels, chunk_s
     elif handoff == "none":
         plan += " | independent chunks (nothing inherited, crossfaded seams)"
     elif handoff == "bridge":
-        plan += (f" | independent chunks + {len(bridges)} bridge(s) of {BL} frames, end pin {PE},"
-                 f" at {[b for b, _, _ in bridges]}")
+        plan += (f" | independent chunks + {len(bridges)} bridge(s) of {BL} frames, pins {PS}+{PE},"
+                 f" at {[b for b, _, _ in bridges]}, pins {lab.get('pin_mode', opts.get('pin_mode', 'keyframe'))}")
     if upscaler:
         plan += f" | upscale to {upscale_megapixels} MP with {up_model}, {upscale_steps} steps @ {upscale_denoise}"
     if refmod_blocks:
@@ -1096,12 +1098,12 @@ def run_rolling(model, clip, vae, audio_vae, frames, prompt, megapixels, chunk_s
         total = max(upscale_steps, int(upscale_steps / max(upscale_denoise, 1e-3)))
         up_sigmas = comfy.samplers.calculate_sigmas(model_sampling, "linear_quadratic", total).cpu()[-(upscale_steps + 1):]
 
-    def sample(cond, latent_samples, sig, noise_seed, mdl=None):
+    def sample(cond, latent_samples, sig, noise_seed, mdl=None, mask=None):
         guider = Guider_Basic(mdl if mdl is not None else model)
         guider.set_conds(cond)
         noise = comfy.sample.prepare_noise(latent_samples, noise_seed)
         callback = latent_preview.prepare_callback(model, sig.shape[-1] - 1, {})
-        result = guider.sample(noise, latent_samples, sampler, sig, denoise_mask=None, callback=callback,
+        result = guider.sample(noise, latent_samples, sampler, sig, denoise_mask=mask, callback=callback,
                                disable_pbar=not comfy.utils.PROGRESS_BAR_ENABLED, seed=noise_seed)
         return result.to(comfy.model_management.intermediate_device())
 
@@ -1231,9 +1233,54 @@ def _render_bridged(c):
     upscaler, up_model, vae, audio_vae, lab = c["upscaler"], c["up_model"], c["vae"], c["audio_vae"], c["lab"]
     upscale_megapixels = c["upscale_megapixels"]
     job_model = c["job_model"]
-    PIN = 5
+    PIN = c["PS"]
     PE = c["PE"]
     na = round(PIN * FRAME_RESCALE)
+    pin_mode = lab.get("pin_mode", c["opts"].get("pin_mode", "keyframe"))
+    fade_a = int(lab.get("bridge_fade", PIN))  # frames cross-faded where a bridge meets chunk A (0 = hard join)
+    fade_b = int(lab.get("bridge_fade", PE))  # ... and where chunk B takes over from the bridge
+    hold_audio = bool(lab.get("hold_audio", True))
+    same_seed = bool(lab.get("bridge_same_seed", False))  # bridges sample with the chunks' seed
+    print(f"[H3 Rolling] bridge pins: {pin_mode}, fades {fade_a}/{fade_b}"
+          + ("" if pin_mode == "keyframe" or hold_audio else ", audio not held"))
+
+    def held(samples, a_lat, a_len, b_lat, bl):
+        """mask pin_mode: write A's last PIN frames and B's first PE frames straight into the bridge's own
+        starting latent and mask them 0, so the sampler keeps them and they decode as the originals
+        (roycho87's Clown Context / Clown Anchoring). Positions only line up on H3's 17-frame blocks."""
+        if a_len % 17 != 5 or bl % 17 != 5 or (bl - PE) % 17:
+            raise ValueError(f"masked pins need 17k+5 lengths (chunk {a_len}, bridge {bl}, end pin {PE})")
+        NT = comfy.nested_tensor.NestedTensor
+        v, a = [t.clone() for t in samples.unbind()[:2]]
+        av, aa = a_lat.unbind()[:2]
+        mv, ma = torch.ones_like(v), torch.ones_like(a)
+        n0 = video_latent_t(PIN)
+        v[:, :, :n0] = av[:, :, -n0:].to(v)
+        mv[:, :, :n0] = 0
+        note = f"latents 0..{n0 - 1} <- A's last {PIN} frames"
+        if hold_audio:
+            a0 = round((a_len - PIN) * FRAME_RESCALE)
+            src = aa[..., a0:a0 + na]
+            k = min(src.shape[-1], a.shape[-1])
+            a[..., :k] = src[..., :k].to(a)
+            ma[..., :k] = 0
+            note += f" (+{k} audio)"
+        if b_lat is not None:
+            bv, ba = b_lat.unbind()[:2]
+            n1 = video_latent_t(PE)
+            t = v.shape[2]
+            v[:, :, t - n1:] = bv[:, :, :n1].to(v)
+            mv[:, :, t - n1:] = 0
+            note += f", latents {t - n1}..{t - 1} <- B's first {PE} frames"
+            if hold_audio:
+                b0 = round(FRAME_RESCALE * (bl - PE))
+                k = max(0, min(round(PE * FRAME_RESCALE), a.shape[-1] - b0, ba.shape[-1]))
+                if k:
+                    a[..., b0:b0 + k] = ba[..., :k].to(a)
+                    ma[..., b0:b0 + k] = 0
+                    note += f" (+{k} audio)"
+        print(f"[H3 Rolling] held {note}")
+        return NT((v, a)), NT((mv, ma))
 
     def pins(cond, a_lat, a_len, b_lat, bl, bridge_audio_t):
         av, aa = a_lat.unbind()[:2]
@@ -1274,14 +1321,23 @@ def _render_bridged(c):
         bl = bridges[j][1]
         at = latent["samples"].unbind()[1].shape[-1]
         jm = job_model(bridges[j][0], bl)
-        lo = sample(pins(cond, A["lo"], A["len"], B["lo"] if B else None, bl, at), latent["samples"], sigmas,
-                    seed + 50000 + j, jm)
+        s_lo, s_hi = (seed, seed + 100000) if same_seed else (seed + 50000 + j, seed + 150000 + j)
+        if pin_mode == "mask":
+            start, mask = held(latent["samples"], A["lo"], A["len"], B["lo"] if B else None, bl)
+            lo = sample(cond, start, sigmas, s_lo, jm, mask)
+        else:
+            lo = sample(pins(cond, A["lo"], A["len"], B["lo"] if B else None, bl, at), latent["samples"], sigmas,
+                        s_lo, jm)
         _mark(f"bridge {j + 1} sample")
         hi = None
         if upscaler:
             big = upscale(lo)
-            hi = sample(pins(cond, A["hi"], A["len"], B["hi"] if B else None, bl, at), big, up_sigmas,
-                        seed + 150000 + j, jm)
+            if pin_mode == "mask":
+                big, mask = held(big, A["hi"], A["len"], B["hi"] if B else None, bl)
+                hi = sample(cond, big, up_sigmas, s_hi, jm, mask)
+            else:
+                hi = sample(pins(cond, A["hi"], A["len"], B["hi"] if B else None, bl, at), big, up_sigmas,
+                            s_hi, jm)
             _mark(f"bridge {j + 1} upscale+polish")
         return {"lo": lo, "hi": hi, "len": bl}
 
@@ -1293,8 +1349,9 @@ def _render_bridged(c):
 
     st = {"sink": None, "audio": None, "sr": None}
 
-    def place(idx, s, r, blend, fade=PIN):
-        imgs, wf, sr = decode(r)
+    def place(idx, s, r, blend, fade=PIN, check=0, dec=None):
+        imgs, wf, sr = dec if dec is not None else decode(r)
+        dec = None
         _mark(f"{idx} decode")
         if st["sink"] is None:
             hh, ww = imgs.shape[1], imgs.shape[2]
@@ -1302,6 +1359,11 @@ def _render_bridged(c):
             st["sr"] = sr
             st["audio"] = torch.zeros((1, wf.shape[1], round(F / FPS * sr)), dtype=torch.float32)
         seg = imgs[:max(0, min(imgs.shape[0], r["len"], F - s))]
+        if blend and check:  # how far the incoming piece's shared frames are from what's already placed
+            m = min(check, seg.shape[0])
+            d = (st["sink"].get(s, s + m) - seg[:m].float()).abs().mean(dim=(1, 2, 3)) * 255
+            print(f"[H3 Rolling] join {idx} @ {s}: mean abs diff over the {m} shared frames "
+                  f"{' '.join(f'{x:.2f}' for x in d.tolist())} (0-255)")
         st["sink"].place(1 if blend else 0, s, seg, fade)
         del imgs, seg  # the decoded chunk is the biggest thing in RAM; drop it before the audio work
         out = st["audio"]
@@ -1319,21 +1381,61 @@ def _render_bridged(c):
             out[..., a0:a0 + ab] = out[..., a0:a0 + ab] * (1 - ramp) + seg_a[..., :ab] * ramp
             out[..., a0 + ab:a0 + want] = seg_a[..., ab:]
 
+    def colorfix(j, br_dec, b_imgs):
+        """Match the bridge's free middle to the real frames on either side: a per-channel quantile curve where the
+        free part starts (vs chunk A's last frames) and where it ends (vs chunk B's first frames), eased across."""
+        imgs = br_dec[0]
+        b0, bl = bridges[j][0], bridges[j][1]
+        f0, f1 = PIN, (bl - PE) if b_imgs is not None else imgs.shape[0]
+        if f1 - f0 < 2:
+            return br_dec
+        k = 3
+        qs = torch.linspace(0, 1, 65)
+
+        def curve(src, ref):
+            src = src[:, ::4, ::4].reshape(-1, 3)
+            ref = ref[:, ::4, ::4].reshape(-1, 3).float()
+            return [(torch.quantile(src[:, ch], qs).numpy(), torch.quantile(ref[:, ch], qs).numpy()) for ch in range(3)]
+
+        ca = curve(imgs[f0:f0 + k], st["sink"].get(b0 + f0 - k, b0 + f0))
+        cb = curve(imgs[f1 - k:f1], b_imgs[:k]) if b_imgs is not None else ca
+        out = imgs.clone()
+        n = f1 - f0
+        for i in range(f0, f1):
+            w = (i - f0 + 0.5) / n
+            x = imgs[i].numpy()
+            for ch in range(3):
+                ya = np.interp(x[..., ch], ca[ch][0], ca[ch][1])
+                yb = np.interp(x[..., ch], cb[ch][0], cb[ch][1])
+                out[i, ..., ch] = torch.from_numpy((1 - w) * ya + w * yb)
+        gain = (out[f0:f1] - imgs[f0:f1]).mean().item() * 255
+        print(f"[H3 Rolling] bridge {j + 1} color matched to its chunks: free frames {f0}-{f1 - 1} moved {gain:+.2f} levels on average")
+        return (out.clamp(0, 1),) + tuple(br_dec[1:])
+
+    color = bool(lab.get("bridge_color", False))
     prev = render_chunk(0)
     place("chunk 1", starts[0], prev, False)
     for k in range(1, len(starts)):
         comfy.model_management.throw_exception_if_processing_interrupted()
         cur = render_chunk(k)
         br = render_bridge(k - 1, prev, cur)
-        place(f"bridge {k}", bridges[k - 1][0], br, True)
-        place(f"chunk {k + 1}", starts[k], cur, True, PE)
+        if color:
+            cur_dec = decode(cur)
+            br_dec = colorfix(k - 1, decode(br), cur_dec[0])
+            place(f"bridge {k}", bridges[k - 1][0], br, True, fade_a, PIN, br_dec)
+            del br_dec
+            place(f"chunk {k + 1}", starts[k], cur, True, fade_b, PE, cur_dec)
+            del cur_dec
+        else:
+            place(f"bridge {k}", bridges[k - 1][0], br, True, fade_a, PIN)
+            place(f"chunk {k + 1}", starts[k], cur, True, fade_b, PE)
         print(f"[H3 Rolling] rendered chunk {k + 1}/{len(starts)} + bridge {k}")
         st["sink"].flush(bridges[k][0] if k < len(bridges) else F)
         prev = cur
     if len(bridges) == len(starts):  # tail bridge: pinned to the last chunk at its start only
         j = len(bridges) - 1
         br = render_bridge(j, prev, None)
-        place("tail bridge", bridges[j][0], br, True)
+        place("tail bridge", bridges[j][0], br, True, fade_a, 0, colorfix(j, decode(br), None) if color else None)
         print("[H3 Rolling] rendered tail bridge")
     st["sink"].flush(F)
 
