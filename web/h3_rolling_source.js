@@ -56,6 +56,7 @@ function setupScrubber(node) {
   });
   button("Reset", () => { setVal("start_seconds", 0); setVal("end_seconds", 0); });
   button("Upload…", () => fileInput.click());
+  button("Queue batch", () => queueBatch());
 
   root.append(video, bar, readout, fileInput);
 
@@ -66,6 +67,47 @@ function setupScrubber(node) {
     w.callback?.(v);
     app.graph.setDirtyCanvas(true, true);
     update();
+  }
+
+  // Queue batch: split the selected range into even slices no longer than the Rolling node's
+  // chunk_seconds and queue one job per slice. Each job is a single chunk, so no bridges or stitching.
+  let batching = false;
+  async function queueBatch() {
+    if (batching) return;
+    const s0 = Number(W("start_seconds")?.value ?? 0);
+    const e0 = Number(W("end_seconds")?.value ?? 0);
+    const dur = isFinite(video.duration) ? video.duration : 0;
+    const end = e0 > 0 ? e0 : dur;
+    if (!(end > s0)) {
+      readout.textContent = "Queue batch: set an end point (or let the video finish loading)";
+      return;
+    }
+    const rolling = app.graph._nodes.filter((n) => n.type === "H3RollingRef2VA" && n.mode === 0);
+    if (rolling.length !== 1) {
+      readout.textContent = `Queue batch: need exactly one active H3 Rolling Ref2VA node (found ${rolling.length})`;
+      return;
+    }
+    const chunk = Number(rolling[0].widgets?.find((w) => w.name === "chunk_seconds")?.value ?? 15);
+    const total = end - s0;
+    const n = Math.max(1, Math.ceil(total / chunk - 1e-6));
+    const len = total / n;
+    const cuts = Array.from({ length: n + 1 }, (_, k) => round(s0 + k * len));
+    cuts[n] = round(end);
+    batching = true;
+    try {
+      for (let k = 0; k < n; k++) {
+        setVal("start_seconds", cuts[k]);
+        setVal("end_seconds", cuts[k + 1]);
+        readout.textContent = `queueing ${k + 1}/${n}: ${cuts[k].toFixed(2)}s → ${cuts[k + 1].toFixed(2)}s`;
+        await app.queuePrompt(0, 1);
+      }
+    } finally {
+      setVal("start_seconds", s0);
+      setVal("end_seconds", e0);
+      batching = false;
+    }
+    readout.textContent = `queued ${n} job(s) of ${len.toFixed(2)}s: ` +
+      cuts.slice(0, -1).map((c, k) => `${c.toFixed(2)}–${cuts[k + 1].toFixed(2)}`).join(", ");
   }
 
   function load() {
