@@ -69,7 +69,7 @@ function setupScrubber(node) {
     update();
   }
 
-  // Queue batch: split the selected range into even slices no longer than the Rolling node's
+  // Queue batch: split the selected range into slices of the Rolling node's
   // chunk_seconds and queue one job per slice. Each job is a single chunk, so no bridges or stitching.
   let batching = false;
   async function queueBatch() {
@@ -88,11 +88,17 @@ function setupScrubber(node) {
       return;
     }
     const chunk = Number(rolling[0].widgets?.find((w) => w.name === "chunk_seconds")?.value ?? 15);
-    const total = end - s0;
-    const n = Math.max(1, Math.ceil(total / chunk - 1e-6));
-    const len = total / n;
-    const cuts = Array.from({ length: n + 1 }, (_, k) => round(s0 + k * len));
-    cuts[n] = round(end);
+    // full chunk_seconds slices, then whatever's left as a shorter last job
+    // (a leftover under 5 frames is too short for H3 and gets dropped)
+    const cuts = [round(s0)];
+    while (end - cuts[cuts.length - 1] > chunk + 1e-6) cuts.push(round(cuts[cuts.length - 1] + chunk));
+    cuts.push(round(end));
+    let dropped = 0;
+    if (cuts.length > 2 && cuts[cuts.length - 1] - cuts[cuts.length - 2] < 5 / 24) {
+      dropped = cuts[cuts.length - 1] - cuts[cuts.length - 2];
+      cuts.pop();
+    }
+    const n = cuts.length - 1;
     batching = true;
     try {
       for (let k = 0; k < n; k++) {
@@ -106,8 +112,9 @@ function setupScrubber(node) {
       setVal("end_seconds", e0);
       batching = false;
     }
-    readout.textContent = `queued ${n} job(s) of ${len.toFixed(2)}s: ` +
-      cuts.slice(0, -1).map((c, k) => `${c.toFixed(2)}–${cuts[k + 1].toFixed(2)}`).join(", ");
+    readout.textContent = `queued ${n} job(s): ` +
+      cuts.slice(0, -1).map((c, k) => `${c.toFixed(2)}–${cuts[k + 1].toFixed(2)}`).join(", ") +
+      (dropped ? `  (dropped the last ${dropped.toFixed(2)}s, under 5 frames)` : "");
   }
 
   function load() {

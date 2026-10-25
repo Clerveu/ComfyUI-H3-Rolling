@@ -34,7 +34,7 @@ The nodes show up under **MiniMax H3/rolling**.
 ### H3 Rolling Source (scrub)
 Pick or upload a video, scrub the built-in player and set the start and end points. It outputs frames at 24 fps (any input frame rate is resampled, which H3 needs) and the soundtrack. `short_edge` shrinks the source: it's only choreography, and 480 is plenty for most clips. Go lower than 480 only for slow motion; fast hands and quick moves need the detail.
 
-**Queue batch** (button under the player): splits the selected range into even slices no longer than the Rolling Ref2VA node's `chunk_seconds` and queues one job per slice, so 60 s at 15 s chunks is four jobs, and 61 s is five of 12.2 s. Each job renders its slice as a single chunk with the node's other settings (upscale pass, dialogue, structure lock) and saves on its own: no bridges, no stitching. The start and end points go back to what they were once everything is queued.
+**Queue batch** (button under the player): splits the selected range into slices of the Rolling Ref2VA node's `chunk_seconds` and queues one job per slice, so 60 s at 15 s chunks is four jobs, and 61 s is four of 15 s plus a 1 s last job (a leftover under 5 frames is dropped). Each job renders its slice as a single chunk with the node's other settings (upscale pass, dialogue, structure lock) and saves on its own: no bridges, no stitching. The start and end points go back to what they were once everything is queued.
 
 ### H3 Rolling Ref2VA
 The whole render. Minimal wiring:
