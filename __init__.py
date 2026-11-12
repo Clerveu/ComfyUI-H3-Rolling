@@ -6,7 +6,7 @@ import os
 import comfy.samplers
 import folder_paths
 
-from . import rolling_core
+from . import rolling_core, rolling_gen
 
 VIDEO_EXTS = (".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v")
 
@@ -181,12 +181,107 @@ class H3RollingRef2VA:
                      "dialogue": dialogue, "speakers": speakers, "pin_mode": pin_mode})
 
 
+GEN_PROMPT = """subject_definitions:
+<Subject 1> is the cat whose appearance comes from <Picture 1>.
+
+summary:
+[reference generation] <Subject 1> rides a skateboard down a quiet street in one continuous shot.
+
+retention_analysis:
+<Subject 1> (throughout [Shot 1]): fully_preserved - her face, coat, and proportions from <Picture 1>.
+
+detailed_description:
+Photorealistic live-action footage in daylight.
+
+[Shot 1] A tracking shot follows <Subject 1>, a real cat, standing on a skateboard as it rolls down a quiet street, her paws planted on the deck. The camera tracks alongside her at the same speed.
+
+overall_soundscape:
+Skateboard wheels on pavement and light wind.
+
+non_diegetic_music:
+N/A"""
+
+
+class H3RollingGenerate:
+    """A long H3 video from pictures and prompts, no source video: a chain of clips, each starting from the end of
+    the one before (roycho87's Geiru Context Suite does the hand-off and the drift protection), joined as it renders."""
+
+    CATEGORY = "MiniMax H3/rolling"
+    RETURN_TYPES = ("IMAGE", "AUDIO", "STRING")
+    RETURN_NAMES = ("frames", "audio", "plan")
+    FUNCTION = "run"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("MODEL",),
+                "clip": ("CLIP",),
+                "vae": ("VAE", {"tooltip": "Video VAE"}),
+                "audio_vae": ("VAE", {"tooltip": "Audio VAE"}),
+                "prompts": ("STRING", {"multiline": True, "default": GEN_PROMPT,
+                                       "tooltip": "One prompt = every clip uses it (generic ongoing action). For progressive action or dialogue, write one prompt per clip, separated by a line of three dashes: ---  With fewer prompts than clips, the last one repeats. Tags: <Picture N>."}),
+                "width": ("INT", {"default": 864, "min": 256, "max": 2048, "step": 32}),
+                "height": ("INT", {"default": 480, "min": 256, "max": 2048, "step": 32}),
+                "clip_seconds": ("FLOAT", {"default": 8.0, "min": 2.0, "max": 15.0, "step": 0.25,
+                                           "tooltip": "Length of each clip. H3 is trained on 5-15s."}),
+                "clips": ("INT", {"default": 3, "min": 1, "max": 200,
+                                  "tooltip": "How many clips to chain. Total length = clips x (clip - overlap) + overlap."}),
+                "overlap_frames": (["39", "22", "56"], {"default": "39",
+                                                        "tooltip": "Frames each clip shares with the one before (Geiru Context's head_frames)."}),
+                "drop_last": (["17", "0", "34"], {"default": "17",
+                                                  "tooltip": "Of the overlap, how many frames at its end are made fresh instead of held (they still fit the held sound). 39 with 17 = 22 held, 17 free."}),
+                "steps": ("INT", {"default": 6, "min": 1, "max": 100}),
+                "sampler_name": (comfy.samplers.KSampler.SAMPLERS, {"default": "er_sde"}),
+                "scheduler": (comfy.samplers.KSampler.SCHEDULERS, {"default": "beta"}),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "control_after_generate": True,
+                                 "tooltip": "Clip N uses seed + N."}),
+                "ref_image_size": (["match", "max"], {"default": "max"}),
+                "hold_audio": ("BOOLEAN", {"default": True, "tooltip": "Hold the previous clip's sound across the overlap."}),
+                "degradation_protection": ("BOOLEAN", {"default": True,
+                                                       "tooltip": "Geiru's switch: off = plain chain (keystone, late lock and context noise all pass through). Turn it off around hard cuts and scene changes."}),
+                "keystone": (rolling_gen.KEYSTONE_PLACEMENTS, {"default": rolling_gen.KEYSTONE_PLACEMENTS[0],
+                                                              "tooltip": "Geiru Keystone: clip 1's first frame locked into the start of every later clip (and put back after), and/or a frame from clip 1's end tacked onto the back."}),
+                "late_lock_step": ("INT", {"default": 4, "min": 0, "max": 100,
+                                           "tooltip": "Geiru Late Lock: steps before the keystone/capstone come in, so the clip picks its own pose first. He recommends the last quarter of the steps."}),
+                "late_lock_slots": (rolling_gen.LATE_LOCK_SLOTS, {"default": rolling_gen.LATE_LOCK_SLOTS[0]}),
+                "context_noise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05,
+                                            "tooltip": "Geiru Context Noise: how much of the current noise the held frames get, fading to none at the join. 0 = off."}),
+                "soundtrack": (["generated", "silent"], {"default": "generated"}),
+            },
+            "optional": {
+                "sampler": ("SAMPLER", {"tooltip": "Overrides sampler_name"}),
+                "sigmas": ("SIGMAS", {"tooltip": "Overrides steps + scheduler"}),
+                "picture_1": ("IMAGE",),
+                "picture_2": ("IMAGE",),
+                "picture_3": ("IMAGE",),
+                "picture_4": ("IMAGE",),
+            },
+        }
+
+    def run(self, model, clip, vae, audio_vae, prompts, width, height, clip_seconds, clips, overlap_frames, drop_last,
+            steps, sampler_name, scheduler, seed, ref_image_size, hold_audio=True, degradation_protection=True,
+            keystone=rolling_gen.KEYSTONE_PLACEMENTS[0], late_lock_step=4, late_lock_slots=rolling_gen.LATE_LOCK_SLOTS[0],
+            context_noise=1.0, soundtrack="generated", sampler=None, sigmas=None,
+            picture_1=None, picture_2=None, picture_3=None, picture_4=None):
+        importlib.reload(rolling_core)
+        importlib.reload(rolling_gen)
+        return rolling_gen.run_generate(
+            model, clip, vae, audio_vae, prompts, width, height, clip_seconds, clips, int(overlap_frames),
+            int(drop_last), steps, sampler_name, scheduler, seed, ref_image_size, hold_audio=hold_audio,
+            protection=degradation_protection, keystone=keystone, late_lock_step=late_lock_step,
+            late_lock_slots=late_lock_slots, context_noise=context_noise, soundtrack=soundtrack,
+            pictures=(picture_1, picture_2, picture_3, picture_4), sampler=sampler, sigmas=sigmas)
+
+
 NODE_CLASS_MAPPINGS = {
     "H3RollingSource": H3RollingSource,
     "H3RollingRef2VA": H3RollingRef2VA,
+    "H3RollingGenerate": H3RollingGenerate,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "H3RollingSource": "H3 Rolling Source (scrub)",
     "H3RollingRef2VA": "H3 Rolling Ref2VA",
+    "H3RollingGenerate": "H3 Rolling Generate (Geiru chain)",
 }
 WEB_DIRECTORY = "./web"
