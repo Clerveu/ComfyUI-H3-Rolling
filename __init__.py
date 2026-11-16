@@ -332,7 +332,7 @@ class H3RollingAnchors:
                 "sampler_name": (comfy.samplers.KSampler.SAMPLERS, {"default": "er_sde"}),
                 "scheduler": (comfy.samplers.KSampler.SCHEDULERS, {"default": "beta"}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "control_after_generate": True,
-                                 "tooltip": "Every anchor uses this seed; bridge N uses seed + 50000 + N."}),
+                                 "tooltip": "Anchor N uses seed + N; bridge N uses seed + 50000 + N."}),
                 "ref_image_size": (["match", "max"], {"default": "max"}),
                 "pin_mode": (["mask", "keyframe"], {"default": "mask",
                                                     "tooltip": "How a bridge holds the 5 frames it shares with each anchor. mask: the anchors' real latents are written into the bridge and masked off, so they decode as the anchors' own frames and the joins are plain cuts. keyframe: passed as H3 keyframe guides; the bridge draws its own copy and the joins are 5-frame crossfades."}),

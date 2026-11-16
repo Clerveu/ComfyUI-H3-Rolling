@@ -202,11 +202,11 @@ def run_anchors(model, clip, vae, audio_vae, prompt, beats, width, height, ancho
 
     def render_anchor(k, enc):
         cond, latent = enc
-        lo = sample(cond, latent["samples"], sigmas, seed)
+        lo = sample(cond, latent["samples"], sigmas, seed + k)  # own seed: same prompt + same seed = the same clip
         _mark(f"anchor {k + 1} sample")
         hi = None
         if upscaler:
-            hi = sample(cond, upscale(lo), up_sigmas, seed + 100000)
+            hi = sample(cond, upscale(lo), up_sigmas, seed + 100000 + k)
             _mark(f"anchor {k + 1} upscale+polish")
         return {"lo": lo, "hi": hi, "len": A}
 
