@@ -6,7 +6,7 @@ import os
 import comfy.samplers
 import folder_paths
 
-from . import rolling_core, rolling_gen
+from . import rolling_anchor, rolling_core, rolling_gen
 
 VIDEO_EXTS = (".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v")
 
@@ -274,14 +274,109 @@ class H3RollingGenerate:
             pictures=(picture_1, picture_2, picture_3, picture_4), sampler=sampler, sigmas=sigmas)
 
 
+ANCHOR_PROMPT = """subject_definitions:
+<Subject 1> is the woman whose appearance comes from <Picture 1>.
+<Subject 2> is the room shown in {still}.
+
+summary:
+[reference generation] {beat}
+
+retention_analysis:
+<Subject 1> (throughout [Shot 1]): fully_preserved - her face, hair, build and clothing from <Picture 1>.
+<Subject 2> (throughout [Shot 1]): fully_preserved - the room, its furniture and its light from {still}.
+
+detailed_description:
+Photorealistic live-action footage in a living room in daylight, filmed by a static camera.
+
+[Shot 1] {beat}
+
+overall_soundscape:
+Quiet room tone.
+
+non_diegetic_music:
+N/A"""
+
+ANCHOR_BEATS = """<Subject 1> stands at the window on the left side of the room.
+<Subject 1> turns from the window, walks across the room to the couch on the right side of the room, and sits down on it.
+<Subject 1> sits on the couch on the right side of the room."""
+
+
+class H3RollingAnchors:
+    """A long H3 video from pictures and a storyboard, no source video: short anchor clips rendered on their own,
+    then a long bridge between each pair, pinned to both. Nothing is ever rendered from a bridge."""
+
+    CATEGORY = "MiniMax H3/rolling"
+    RETURN_TYPES = ("IMAGE", "AUDIO", "STRING")
+    RETURN_NAMES = ("frames", "audio", "plan")
+    FUNCTION = "run"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("MODEL",),
+                "clip": ("CLIP",),
+                "vae": ("VAE", {"tooltip": "Video VAE"}),
+                "audio_vae": ("VAE", {"tooltip": "Audio VAE"}),
+                "prompt": ("STRING", {"multiline": True, "default": ANCHOR_PROMPT,
+                                      "tooltip": "The prompt every piece shares. {beat} is replaced by that piece's line from the beats box. {still} is the tag of a frame taken from anchor 1 and given to every later piece as an extra picture; lines that mention {still} are left out of anchor 1's own prompt. Leave {still} out entirely and no frame is taken. Or skip the beats box and write whole prompts here, separated by lines of ---, in the order anchor, bridge, anchor ... anchor."}),
+                "beats": ("STRING", {"multiline": True, "default": ANCHOR_BEATS,
+                                     "tooltip": "One line per piece, alternating: where she is (anchor), how she gets to the next place (bridge), where she is then (anchor) ... ending on an anchor. 3 lines = 2 anchors + 1 bridge, 5 lines = 3 anchors + 2 bridges."}),
+                "width": ("INT", {"default": 864, "min": 256, "max": 2048, "step": 32}),
+                "height": ("INT", {"default": 480, "min": 256, "max": 2048, "step": 32}),
+                "anchor_frames": (["22", "39", "56"], {"default": "22",
+                                                       "tooltip": "Length of each anchor clip. Its first and last 5 frames are shared with the bridges on either side."}),
+                "clip_seconds": ("FLOAT", {"default": 5.0, "min": 1.0, "max": 15.0, "step": 0.25,
+                                           "tooltip": "Length of each bridge: the time she has to get from one anchor to the next. H3 is trained on 5-15s."}),
+                "steps": ("INT", {"default": 6, "min": 1, "max": 100}),
+                "sampler_name": (comfy.samplers.KSampler.SAMPLERS, {"default": "er_sde"}),
+                "scheduler": (comfy.samplers.KSampler.SCHEDULERS, {"default": "beta"}),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "control_after_generate": True,
+                                 "tooltip": "Every anchor uses this seed; bridge N uses seed + 50000 + N."}),
+                "ref_image_size": (["match", "max"], {"default": "max"}),
+                "pin_mode": (["mask", "keyframe"], {"default": "mask",
+                                                    "tooltip": "How a bridge holds the 5 frames it shares with each anchor. mask: the anchors' real latents are written into the bridge and masked off, so they decode as the anchors' own frames and the joins are plain cuts. keyframe: passed as H3 keyframe guides; the bridge draws its own copy and the joins are 5-frame crossfades."}),
+                "soundtrack": (["generated", "silent"], {"default": "generated"}),
+                "upscale_pass": ("BOOLEAN", {"default": False,
+                                             "tooltip": "Per piece: latent-upscale with the Minimax H3 3D upscaler, then a short polish pass (Seed Hunter's stage 2). Bridges are pinned to the upscaled anchors."}),
+                "upscale_megapixels": ("FLOAT", {"default": 1.5, "min": 0.2, "max": 4.0, "step": 0.1}),
+                "upscale_steps": ("INT", {"default": 2, "min": 1, "max": 30}),
+                "upscale_denoise": ("FLOAT", {"default": 0.4, "min": 0.05, "max": 1.0, "step": 0.05}),
+            },
+            "optional": {
+                "sampler": ("SAMPLER", {"tooltip": "Overrides sampler_name"}),
+                "sigmas": ("SIGMAS", {"tooltip": "Overrides steps + scheduler"}),
+                "picture_1": ("IMAGE",),
+                "picture_2": ("IMAGE",),
+                "picture_3": ("IMAGE",),
+                "picture_4": ("IMAGE",),
+            },
+        }
+
+    def run(self, model, clip, vae, audio_vae, prompt, beats, width, height, anchor_frames, clip_seconds, steps,
+            sampler_name, scheduler, seed, ref_image_size, pin_mode="mask", soundtrack="generated",
+            upscale_pass=False, upscale_megapixels=1.5, upscale_steps=2, upscale_denoise=0.4,
+            sampler=None, sigmas=None, picture_1=None, picture_2=None, picture_3=None, picture_4=None):
+        importlib.reload(rolling_core)
+        importlib.reload(rolling_anchor)
+        return rolling_anchor.run_anchors(
+            model, clip, vae, audio_vae, prompt, beats, width, height, int(anchor_frames), clip_seconds, steps,
+            sampler_name, scheduler, seed, ref_image_size, pin_mode=pin_mode, soundtrack=soundtrack,
+            upscale_pass=upscale_pass, upscale_megapixels=upscale_megapixels, upscale_steps=upscale_steps,
+            upscale_denoise=upscale_denoise, pictures=(picture_1, picture_2, picture_3, picture_4),
+            sampler=sampler, sigmas=sigmas)
+
+
 NODE_CLASS_MAPPINGS = {
     "H3RollingSource": H3RollingSource,
     "H3RollingRef2VA": H3RollingRef2VA,
     "H3RollingGenerate": H3RollingGenerate,
+    "H3RollingAnchors": H3RollingAnchors,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "H3RollingSource": "H3 Rolling Source (scrub)",
     "H3RollingRef2VA": "H3 Rolling Ref2VA",
     "H3RollingGenerate": "H3 Rolling Generate (Geiru chain)",
+    "H3RollingAnchors": "H3 Rolling Anchors (beats + bridges)",
 }
 WEB_DIRECTORY = "./web"
