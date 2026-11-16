@@ -13,6 +13,7 @@ import os
 import re
 import time
 
+import numpy as np
 import torch
 
 from .rolling_core import FPS, FrameSink, _lab, _mark, _stream_path, _T, align, video_latent_t
@@ -268,6 +269,38 @@ def run_anchors(model, clip, vae, audio_vae, prompt, beats, width, height, ancho
             out[..., a0:a0 + ab] = out[..., a0:a0 + ab] * (1 - ramp) + seg_a[..., :ab] * ramp
         out[..., a0 + ab:a0 + want] = seg_a[..., ab:]
 
+    def colorfix(j, br_dec, b_imgs):
+        """Ease the bridge's free frames onto the real frames at both ends: a per-channel quantile curve where the
+        free part starts (vs anchor A's frames just before it) and one where it ends (vs anchor B's first frames),
+        blended linearly across the free part. Takes out the brightness step where free frames meet pinned ones."""
+        imgs = br_dec[0]
+        b0, f0, f1, k = bstarts[j], PIN, BL - PIN, 3
+        qs = torch.linspace(0, 1, 65)
+
+        def curve(src, ref):
+            src = src[:, ::4, ::4].reshape(-1, 3).float()
+            ref = ref[:, ::4, ::4].reshape(-1, 3).float()
+            return [(torch.quantile(src[:, ch], qs).numpy(), torch.quantile(ref[:, ch], qs).numpy()) for ch in range(3)]
+
+        ca = curve(imgs[f0:f0 + k], st["sink"].get(b0 + f0 - k, b0 + f0))
+        cb = curve(imgs[f1 - k:f1], b_imgs[:k])
+        out = imgs.clone()
+        n = f1 - f0
+        for i in range(f0, f1):
+            wt = (i - f0 + 0.5) / n
+            x = imgs[i].numpy()
+            for ch in range(3):
+                ya = np.interp(x[..., ch], ca[ch][0], ca[ch][1])
+                yb = np.interp(x[..., ch], cb[ch][0], cb[ch][1])
+                out[i, ..., ch] = torch.from_numpy((1 - wt) * ya + wt * yb)
+        a_gain = (out[f0:f0 + k] - imgs[f0:f0 + k]).mean().item() * 255
+        b_gain = (out[f1 - k:f1] - imgs[f1 - k:f1]).mean().item() * 255
+        print(f"[H3 Rolling Anchors] bridge {j + 1} color eased onto its anchors: {a_gain:+.2f} levels where it "
+              f"leaves anchor {j + 1}, {b_gain:+.2f} where it reaches anchor {j + 2}")
+        return (out.clamp(0, 1),) + tuple(br_dec[1:])
+
+    color = bool(lab.get("bridge_color", True))
+
     # anchor 1: from the pictures alone
     prev = render_anchor(0, encode(with_still(pieces[0], None), A, pics))
     dec0 = decode(prev)
@@ -298,8 +331,16 @@ def run_anchors(model, clip, vae, audio_vae, prompt, beats, width, height, ancho
         comfy.model_management.throw_exception_if_processing_interrupted()
         cur = render_anchor(k, enc[2 * k])
         br = render_bridge(k - 1, enc[2 * k - 1], prev, cur)
-        place(f"bridge {k}", bstarts[k - 1], br, False)
-        place(f"anchor {k + 1}", starts[k], cur, False)
+        if color:
+            cur_dec = decode(cur)
+            br_dec = colorfix(k - 1, decode(br), cur_dec[0])
+            place(f"bridge {k}", bstarts[k - 1], br, False, br_dec)
+            del br_dec
+            place(f"anchor {k + 1}", starts[k], cur, False, cur_dec)
+            del cur_dec
+        else:
+            place(f"bridge {k}", bstarts[k - 1], br, False)
+            place(f"anchor {k + 1}", starts[k], cur, False)
         print(f"[H3 Rolling Anchors] rendered anchor {k + 1}/{N} + bridge {k}")
         st["sink"].flush(bstarts[k] if k < N - 1 else F)
         prev = cur
