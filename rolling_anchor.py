@@ -322,10 +322,13 @@ def run_anchors(model, clip, vae, audio_vae, prompt, beats, width, height, ancho
     del dec0
 
     # every later piece is encoded now, in one go, so the text encoder comes back only once
-    enc = {}
+    enc, seen = {}, {}
     for i in range(1, len(pieces)):
-        enc[i] = encode(with_still(pieces[i], still_tag), A if i % 2 == 0 else BL, later)
-        _mark(f"encode piece {i + 1}/{len(pieces)}")
+        key = (with_still(pieces[i], still_tag), A if i % 2 == 0 else BL)
+        if key not in seen:  # pieces with the same words and length share one encode
+            seen[key] = encode(key[0], key[1], later)
+            _mark(f"encode piece {i + 1}/{len(pieces)}")
+        enc[i] = seen[key]
 
     for k in range(1, N):
         comfy.model_management.throw_exception_if_processing_interrupted()
