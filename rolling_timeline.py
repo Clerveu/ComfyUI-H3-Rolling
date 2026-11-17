@@ -578,7 +578,7 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
         res = getattr(res, "args", None) or res.result
         return NT((res[0]["samples"], audio_lat))
 
-    def held(samples, a_lat, a_len, b_lat, bl, lead=0):
+    def held(samples, a_lat, a_len, b_lat, bl, lead=0, ends="both"):
         """mask pins: the left shot's last 5 frames and the right shot's first 5 written straight into the
         bridge's own starting latent and masked 0, so the sampler keeps them and they decode as the shots'
         own frames (roycho87's Geiru Context / Anchoring method, here into a piece nothing is rendered from)."""
@@ -588,20 +588,23 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
         mv, ma = torch.ones_like(v), torch.ones_like(a)
         n = video_latent_t(PIN)
         t = v.shape[2]
-        v[:, :, :n] = av[:, :, -n:].to(v)
-        mv[:, :, :n] = 0
+        if ends != "end":
+            v[:, :, :n] = av[:, :, -n:].to(v)
+            mv[:, :, :n] = 0
         o = lead // 17 * 5  # latents in the right shot's run-up
-        v[:, :, t - n:] = bv[:, :, o:o + n].to(v)
-        mv[:, :, t - n:] = 0
+        if ends != "start":
+            v[:, :, t - n:] = bv[:, :, o:o + n].to(v)
+            mv[:, :, t - n:] = 0
         a0 = round((a_len - PIN) * FRAME_RESCALE)
         src = aa[..., a0:a0 + na]
         k0 = min(src.shape[-1], a.shape[-1])
-        a[..., :k0] = src[..., :k0].to(a)
-        ma[..., :k0] = 0
+        if ends != "end":
+            a[..., :k0] = src[..., :k0].to(a)
+            ma[..., :k0] = 0
         b0 = round(FRAME_RESCALE * (bl - PIN))
         ao = round(lead * FRAME_RESCALE)
         k1 = max(0, min(na, a.shape[-1] - b0, ba.shape[-1] - ao))
-        if k1:
+        if k1 and ends != "start":
             a[..., b0:b0 + k1] = ba[..., ao:ao + k1].to(a)
             ma[..., b0:b0 + k1] = 0
         return NT((v, a)), NT((mv, ma))
@@ -674,13 +677,16 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
         s_lo, s_hi = seeds(i)
         bl = pieces[i]["frames"]
         pm = pin_of(i)
+        # diagnostic modes: mask_start / mask_end hold one end only (the other end is left free, so that join
+        # is not a join; for measuring what each pin does to the motion)
+        ends = {"mask_start": "start", "mask_end": "end"}.get(pm, "both")
         fresh = fresh_lo = False
 
         def first_stage(sd):
             cond, latent = enc()
             at = latent["samples"].unbind()[1].shape[-1]
             if pm.startswith("mask"):
-                start, mask = held(latent["samples"], a["lo"], a["rlen"], b["lo"], bl, b["lead"])
+                start, mask = held(latent["samples"], a["lo"], a["rlen"], b["lo"], bl, b["lead"], ends)
                 if pm == "mask_endguide":
                     cond = end_guide(cond, b["lo"], bl, at, b["lead"])
                 return sample(cond, start, sigmas, sd, mask)
@@ -724,7 +730,7 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
                 at = latent["samples"].unbind()[1].shape[-1]
                 big = upscale(lo)
                 if pm.startswith("mask"):
-                    big, mask = held(big, a["hi"], a["rlen"], b["hi"], bl, b["lead"])
+                    big, mask = held(big, a["hi"], a["rlen"], b["hi"], bl, b["lead"], ends)
                     if pm == "mask_endguide":
                         cond = end_guide(cond, b["hi"], bl, at, b["lead"])
                     hi = sample(cond, big, up_sigmas, s_hi, mask)
