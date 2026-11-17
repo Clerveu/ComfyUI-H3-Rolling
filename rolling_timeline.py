@@ -54,7 +54,7 @@ def parse_timeline(timeline, prompt, beat, shot_frames, bridge_frames):
      "pieces": [{"kind": "shot"}, {"kind": "bridge", "seconds": 4, "beat": "she walks to the couch"},
                 {"kind": "shot", "prompt": "a whole prompt", "media": ["picture_1", "video"]}]}
 
-    Per piece, all optional: frames or seconds, beat (goes where {beat} is in the shared prompt) or prompt
+    Per piece, all optional: pin (a bridge only: mask, mask_endguide or keyframe), frames or seconds, beat (goes where {beat} is in the shared prompt) or prompt
     (a whole prompt of its own, may also use {beat}), media ("all" or a list of picture_N / video / audio),
     seed. The arguments are the run's defaults; a "defaults" block in the timeline overrides them.
     """
@@ -98,7 +98,7 @@ def parse_timeline(timeline, prompt, beat, shot_frames, bridge_frames):
                 raise ValueError(f"piece {i + 1}: the prompt has {{beat}} in it and this piece has no beat")
             text = text.replace("{beat}", b.strip())
         out.append({"kind": kind, "frames": frames, "text": text.strip(), "media": p.get("media", media),
-                    "seed": p.get("seed")})
+                    "seed": p.get("seed"), "pin": p.get("pin")})
     if len(out) % 2 == 0:
         raise ValueError(f"{len(out)} pieces: they go shot, bridge, shot ... and must end on a shot, so the count is odd")
     return out, notes
@@ -385,6 +385,15 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
     def name(i):
         return f"shot {i // 2 + 1}" if i % 2 == 0 else f"bridge {(i + 1) // 2}"
 
+    def pin_of(i):
+        """How the bridge at (or just before) piece i holds its ends.
+        mask: both ends are the shots' real latents, written in and locked (exact frames, plain cuts).
+        mask_endguide: the same, and the end is also given to H3 as a guide clip (its own 'be here at this
+          frame' input), so the model is told where it has to arrive.
+        keyframe: both ends as guide clips only; the bridge draws its own copy and the joins are crossfades."""
+        j = i if i % 2 else i - 1
+        return (pieces[j]["pin"] if j > 0 and pieces[j]["pin"] else pin_mode)
+
     pics = [p for p in pictures if p is not None]
     for i, p in enumerate(pieces):
         p["pics"], p["video"], p["audio"] = pick_media(p["media"], len(pics), ref_video is not None,
@@ -483,7 +492,7 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
               vid_id if p["video"] else None, aud_id if p["audio"] else None,
               still_from if p["still"] else None]
         if i % 2:
-            lo += [pin_mode, fps[i - 1][0], fps[i + 1][0]]
+            lo += [pin_of(i), fps[i - 1][0], fps[i + 1][0]]
         lo = _fp(*lo)
         hi = None
         if upscaler:
@@ -600,6 +609,18 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
             v, a = samples.unbind()[:2]
             cache_put(fp, v, a)
 
+    def end_guide(cond, b_lat, bl, bridge_audio_t):
+        """Only the arrival as an H3 guide clip: the right shot's first 5 frames anchored at the bridge's last 5."""
+        bv, ba = b_lat.unbind()[:2]
+        n = video_latent_t(PIN)
+        kfs = list(cond[0][1].get("minimax_keyframes", []))
+        end = {"resolved_frame_index": bl - PIN, "latent": bv[:, :, :n].clone()}
+        room = math.floor(bridge_audio_t - FRAME_RESCALE * (bl - PIN))
+        if room > 0:
+            end["audio_latent"] = ba[..., :min(na, room)].clone()
+        kfs.append(end)
+        return node_helpers.conditioning_set_values(cond, {"minimax_keyframes": kfs})
+
     def render_shot(i, enc):
         """enc is only needed (and only made) when something has to be rendered."""
         f_lo, f_hi = fps[i]
@@ -628,13 +649,16 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
         f_lo, f_hi = fps[i]
         s_lo, s_hi = seeds(i)
         bl = pieces[i]["frames"]
+        pm = pin_of(i)
         fresh = fresh_lo = False
 
         def first_stage(sd):
             cond, latent = enc()
             at = latent["samples"].unbind()[1].shape[-1]
-            if pin_mode == "mask":
+            if pm.startswith("mask"):
                 start, mask = held(latent["samples"], a["lo"], a["len"], b["lo"], bl)
+                if pm == "mask_endguide":
+                    cond = end_guide(cond, b["lo"], bl, at)
                 return sample(cond, start, sigmas, sd, mask)
             return sample(pins(cond, a["lo"], a["len"], b["lo"], bl, at), latent["samples"], sigmas, sd)
 
@@ -675,8 +699,10 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
                 cond, latent = enc()
                 at = latent["samples"].unbind()[1].shape[-1]
                 big = upscale(lo)
-                if pin_mode == "mask":
+                if pm.startswith("mask"):
                     big, mask = held(big, a["hi"], a["len"], b["hi"], bl)
+                    if pm == "mask_endguide":
+                        cond = end_guide(cond, b["hi"], bl, at)
                     hi = sample(cond, big, up_sigmas, s_hi, mask)
                 else:
                     hi = sample(pins(cond, a["hi"], a["len"], b["hi"], bl, at), big, up_sigmas, s_hi)
@@ -693,10 +719,10 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
         return imgs, aud["waveform"].float().cpu(), aud["sample_rate"]
 
     st = {"sink": None, "audio": None, "sr": None, "stamped": 0}
-    fade = 0 if pin_mode == "mask" else PIN  # masked pins decode as the same frames, so the joins are plain cuts
 
     def place(i, r, dec=None):
         nm, s, first = name(i), starts[i], i == 0
+        fade = 0 if first or pin_of(i).startswith("mask") else PIN  # masked pins decode as the same frames: plain cuts
         imgs, wf, sr = dec if dec is not None else decode(r)
         _mark(f"{nm} decode")
         if st["sink"] is None:
