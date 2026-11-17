@@ -480,7 +480,7 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
         lo, hi = fps[i]
         return cache_has(lo) and (not upscaler or cache_has(hi))
 
-    used = {"rendered": [], "cached": []}
+    used = {"rendered": [], "upscaled": [], "cached": []}
 
     def encode(p, still):
         images = [pics[j] for j in p["pics"]]
@@ -568,13 +568,13 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
         """enc is only needed (and only made) when something has to be rendered."""
         f_lo, f_hi = fps[i]
         s_lo, s_hi = seeds(i)
-        fresh = False
+        fresh = fresh_lo = False
         lo = load(f_lo)
         if lo is None:
             cond, latent = enc()
             lo = sample(cond, latent["samples"], sigmas, s_lo)
             keep(f_lo, lo)
-            fresh = True
+            fresh = fresh_lo = True
             _mark(f"{name(i)} sample")
         hi = None
         if upscaler:
@@ -585,14 +585,14 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
                 keep(f_hi, hi)
                 fresh = True
                 _mark(f"{name(i)} upscale+polish")
-        used["rendered" if fresh else "cached"].append(name(i))
+        used["rendered" if fresh_lo else "upscaled" if fresh else "cached"].append(name(i))
         return {"lo": lo, "hi": hi, "len": pieces[i]["frames"]}
 
     def render_bridge(i, enc, a, b):
         f_lo, f_hi = fps[i]
         s_lo, s_hi = seeds(i)
         bl = pieces[i]["frames"]
-        fresh = False
+        fresh = fresh_lo = False
         lo = load(f_lo)
         if lo is None:
             cond, latent = enc()
@@ -603,7 +603,7 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
             else:
                 lo = sample(pins(cond, a["lo"], a["len"], b["lo"], bl, at), latent["samples"], sigmas, s_lo)
             keep(f_lo, lo)
-            fresh = True
+            fresh = fresh_lo = True
             _mark(f"{name(i)} sample")
         hi = None
         if upscaler:
@@ -620,7 +620,7 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
                 keep(f_hi, hi)
                 fresh = True
                 _mark(f"{name(i)} upscale+polish")
-        used["rendered" if fresh else "cached"].append(name(i))
+        used["rendered" if fresh_lo else "upscaled" if fresh else "cached"].append(name(i))
         return {"lo": lo, "hi": hi, "len": bl}
 
     def decode(r):
@@ -795,6 +795,7 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
     if use_cache:
         line = (f"rendered {len(used['rendered'])} of {P} pieces"
                 + (f" ({', '.join(used['rendered'])})" if used["rendered"] else "")
+                + (f"; upscaled from a cached first stage: {', '.join(used['upscaled'])}" if used["upscaled"] else "")
                 + (f"; from the piece cache: {', '.join(used['cached'])}" if used["cached"] else ""))
         plan += "\n  " + line
         print(f"{tag} {line}")
