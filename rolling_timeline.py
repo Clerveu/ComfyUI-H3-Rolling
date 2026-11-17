@@ -221,6 +221,115 @@ def draw_label(arr, n, pieces, starts):
     return np.asarray(img).copy()
 
 
+# ---------------------------------------------------------------- the piece cache
+# Every rendered piece is saved under a fingerprint of everything that went into it. A shot depends only
+# on its own prompt, length, media, seed and the run's settings; a bridge on those plus its two shots. So
+# changing one shot re-renders that shot and the two bridges touching it, and nothing else.
+
+CACHE_VERSION = 1
+
+
+def _fp(*parts):
+    import hashlib
+    return hashlib.sha1(json.dumps(parts, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def _tensor_id(t):
+    import hashlib
+    h = hashlib.sha1(str(tuple(t.shape)).encode())
+    h.update(t.detach().cpu().contiguous().numpy().tobytes())
+    return h.hexdigest()
+
+
+def _feed(h, obj, depth=0):
+    """Hash what identifies an object across restarts: values and the heads of tensors, type names for the rest."""
+    if depth > 6:
+        return
+    if isinstance(obj, torch.Tensor):
+        h.update(str(tuple(obj.shape)).encode())
+        h.update(obj.detach().flatten()[:16].float().cpu().numpy().tobytes())
+    elif isinstance(obj, (str, int, float, bool)) or obj is None:
+        h.update(repr(obj).encode())
+    elif isinstance(obj, dict):
+        for k in sorted(obj, key=str):
+            h.update(str(k).encode())
+            _feed(h, obj[k], depth + 1)
+    elif isinstance(obj, (list, tuple)):
+        for x in obj:
+            _feed(h, x, depth + 1)
+    elif callable(obj):
+        h.update(getattr(obj, "__qualname__", type(obj).__name__).encode())
+    else:
+        h.update(type(obj).__name__.encode())
+        for attr in ("weights", "strength"):
+            if hasattr(obj, attr):
+                _feed(h, getattr(obj, attr), depth + 1)
+
+
+def model_id(model):
+    """A fingerprint of the model as patched: base weights (sampled), LoRA patches, and its options."""
+    import hashlib
+    h = hashlib.sha1(type(model.model).__name__.encode())
+    sd = model.model.diffusion_model.state_dict()
+    keys = sorted(sd)
+    h.update(str(len(keys)).encode())
+    for k in keys[::max(1, len(keys) // 12)]:
+        h.update(k.encode())
+        _feed(h, sd[k])
+    patches = getattr(model, "patches", {}) or {}
+    pk = sorted(patches, key=str)
+    h.update(str(len(pk)).encode())
+    for k in pk[::max(1, len(pk) // 12)]:
+        h.update(str(k).encode())
+        _feed(h, patches[k])
+    _feed(h, getattr(model, "model_options", {}))
+    _feed(h, sorted(str(k) for k in (getattr(model, "object_patches", {}) or {})))
+    return h.hexdigest()
+
+
+def sampler_id(sampler, sampler_name):
+    import hashlib
+    if sampler is None:
+        return sampler_name
+    h = hashlib.sha1()
+    _feed(h, [getattr(sampler, "sampler_function", None), getattr(sampler, "extra_options", None),
+              getattr(sampler, "inpaint_options", None)])
+    return h.hexdigest()
+
+
+def _cache_dir():
+    d = os.path.join(os.path.dirname(__file__), "piece_cache")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def cache_has(fp):
+    return fp is not None and os.path.exists(os.path.join(_cache_dir(), fp + ".pt"))
+
+
+def cache_get(fp):
+    p = os.path.join(_cache_dir(), fp + ".pt")
+    try:
+        d = torch.load(p, map_location="cpu", weights_only=True)
+    except Exception:
+        return None
+    os.utime(p)  # newest-used survives pruning
+    return d["v"], d["a"]
+
+
+def cache_put(fp, v, a, budget=8 * 2**30):
+    d = _cache_dir()
+    tmp = os.path.join(d, fp + ".tmp")
+    torch.save({"v": v.detach().cpu(), "a": a.detach().cpu()}, tmp)
+    os.replace(tmp, os.path.join(d, fp + ".pt"))
+    files = sorted((os.path.join(d, f) for f in os.listdir(d) if f.endswith(".pt")), key=os.path.getmtime)
+    total = sum(os.path.getsize(f) for f in files)
+    while files and total > budget:
+        f = files.pop(0)
+        total -= os.path.getsize(f)
+        os.remove(f)
+
+
 # ---------------------------------------------------------------- the run
 
 def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frames, bridge_frames, width, height,
@@ -313,6 +422,66 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
         total = max(upscale_steps, int(upscale_steps / max(upscale_denoise, 1e-3)))
         up_sigmas = comfy.samplers.calculate_sigmas(model_sampling, "linear_quadratic", total).cpu()[-(upscale_steps + 1):]
 
+    # ---- fingerprints (see "the piece cache" above)
+    use_cache = bool(lab.get("piece_cache", True))
+    common = None
+    if use_cache:
+        try:
+            common = [CACHE_VERSION, model_id(model), w, h, ref_image_size, sampler_id(sampler, sampler_name),
+                      [round(float(x), 6) for x in sigmas]]
+            pic_ids = [_tensor_id(p) for p in pics]
+            vid_id = _tensor_id(ref_video) if ref_video is not None else None
+            aud_id = ([_tensor_id(ref_audio["waveform"]), ref_audio["sample_rate"]] if ref_audio is not None else None)
+            up_parts = ([upscale_megapixels, up_model, [round(float(x), 6) for x in up_sigmas]] if upscaler else None)
+        except Exception as e:
+            print(f"{tag} piece cache off for this run: couldn't fingerprint the inputs ({e})")
+            use_cache = False
+
+    def seeds(i):
+        own = pieces[i]["seed"]
+        if i % 2 == 0:
+            s = seed + i // 2 if own is None else int(own)  # own seed: same prompt + same seed = the same clip
+        else:
+            s = seed + 50000 + (i - 1) // 2 if own is None else int(own)
+        return s, s + 100000
+
+    def resolved(p, with_the_still):
+        """The words and the number of pictures this piece is actually handed."""
+        n = len(p["pics"])
+        if p["still"] and with_the_still:
+            return with_still(p["text"], f"<Picture {n + 1}>"), n + 1
+        return with_still(p["text"], None), n
+
+    fps = {}
+
+    def fingerprint(i, still_from=None):
+        """(lo, hi) fingerprints of piece i. still_from = the fingerprint of the render the still was cut from."""
+        if not use_cache:
+            fps[i] = (None, None)
+            return
+        p = pieces[i]
+        text, _ = resolved(p, still_from is not None)
+        s_lo, s_hi = seeds(i)
+        lo = [p["kind"], common, text, p["frames"], s_lo, [pic_ids[j] for j in p["pics"]],
+              vid_id if p["video"] else None, aud_id if p["audio"] else None,
+              still_from if p["still"] else None]
+        if i % 2:
+            lo += [pin_mode, fps[i - 1][0], fps[i + 1][0]]
+        lo = _fp(*lo)
+        hi = None
+        if upscaler:
+            hi = [lo, up_parts, s_hi]
+            if i % 2:
+                hi += [fps[i - 1][1], fps[i + 1][1]]
+            hi = _fp(*hi)
+        fps[i] = (lo, hi)
+
+    def cached(i):
+        lo, hi = fps[i]
+        return cache_has(lo) and (not upscaler or cache_has(hi))
+
+    used = {"rendered": [], "cached": []}
+
     def encode(p, still):
         images = [pics[j] for j in p["pics"]]
         still_tag = None
@@ -386,42 +555,72 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
         kfs.append(end)
         return node_helpers.conditioning_set_values(cond, {"minimax_keyframes": kfs})
 
+    def load(fp):
+        got = cache_get(fp) if cache_has(fp) else None
+        return None if got is None else NT(got)
+
+    def keep(fp, samples):
+        if fp is not None:
+            v, a = samples.unbind()[:2]
+            cache_put(fp, v, a)
+
     def render_shot(i, enc):
-        cond, latent = enc
-        k = i // 2
-        own = pieces[i]["seed"]
-        s_lo = seed + k if own is None else int(own)  # own seed: same prompt + same seed = the same clip
-        lo = sample(cond, latent["samples"], sigmas, s_lo)
-        _mark(f"{name(i)} sample")
+        """enc is only needed (and only made) when something has to be rendered."""
+        f_lo, f_hi = fps[i]
+        s_lo, s_hi = seeds(i)
+        fresh = False
+        lo = load(f_lo)
+        if lo is None:
+            cond, latent = enc()
+            lo = sample(cond, latent["samples"], sigmas, s_lo)
+            keep(f_lo, lo)
+            fresh = True
+            _mark(f"{name(i)} sample")
         hi = None
         if upscaler:
-            hi = sample(cond, upscale(lo), up_sigmas, s_lo + 100000)
-            _mark(f"{name(i)} upscale+polish")
+            hi = load(f_hi)
+            if hi is None:
+                cond, latent = enc()
+                hi = sample(cond, upscale(lo), up_sigmas, s_hi)
+                keep(f_hi, hi)
+                fresh = True
+                _mark(f"{name(i)} upscale+polish")
+        used["rendered" if fresh else "cached"].append(name(i))
         return {"lo": lo, "hi": hi, "len": pieces[i]["frames"]}
 
     def render_bridge(i, enc, a, b):
-        cond, latent = enc
-        j = (i - 1) // 2
+        f_lo, f_hi = fps[i]
+        s_lo, s_hi = seeds(i)
         bl = pieces[i]["frames"]
-        at = latent["samples"].unbind()[1].shape[-1]
-        own = pieces[i]["seed"]
-        s_lo = seed + 50000 + j if own is None else int(own)
-        s_hi = s_lo + 100000
-        if pin_mode == "mask":
-            start, mask = held(latent["samples"], a["lo"], a["len"], b["lo"], bl)
-            lo = sample(cond, start, sigmas, s_lo, mask)
-        else:
-            lo = sample(pins(cond, a["lo"], a["len"], b["lo"], bl, at), latent["samples"], sigmas, s_lo)
-        _mark(f"{name(i)} sample")
+        fresh = False
+        lo = load(f_lo)
+        if lo is None:
+            cond, latent = enc()
+            at = latent["samples"].unbind()[1].shape[-1]
+            if pin_mode == "mask":
+                start, mask = held(latent["samples"], a["lo"], a["len"], b["lo"], bl)
+                lo = sample(cond, start, sigmas, s_lo, mask)
+            else:
+                lo = sample(pins(cond, a["lo"], a["len"], b["lo"], bl, at), latent["samples"], sigmas, s_lo)
+            keep(f_lo, lo)
+            fresh = True
+            _mark(f"{name(i)} sample")
         hi = None
         if upscaler:
-            big = upscale(lo)
-            if pin_mode == "mask":
-                big, mask = held(big, a["hi"], a["len"], b["hi"], bl)
-                hi = sample(cond, big, up_sigmas, s_hi, mask)
-            else:
-                hi = sample(pins(cond, a["hi"], a["len"], b["hi"], bl, at), big, up_sigmas, s_hi)
-            _mark(f"{name(i)} upscale+polish")
+            hi = load(f_hi)
+            if hi is None:
+                cond, latent = enc()
+                at = latent["samples"].unbind()[1].shape[-1]
+                big = upscale(lo)
+                if pin_mode == "mask":
+                    big, mask = held(big, a["hi"], a["len"], b["hi"], bl)
+                    hi = sample(cond, big, up_sigmas, s_hi, mask)
+                else:
+                    hi = sample(pins(cond, a["hi"], a["len"], b["hi"], bl, at), big, up_sigmas, s_hi)
+                keep(f_hi, hi)
+                fresh = True
+                _mark(f"{name(i)} upscale+polish")
+        used["rendered" if fresh else "cached"].append(name(i))
         return {"lo": lo, "hi": hi, "len": bl}
 
     def decode(r):
@@ -526,7 +725,8 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
     color = bool(lab.get("bridge_color", True))
 
     # shot 1: from the pictures alone
-    prev = render_shot(0, encode(pieces[0], None))
+    fingerprint(0)
+    prev = render_shot(0, lambda: encode(pieces[0], None))
     dec0 = decode(prev)
     still = None
     if use_still:
@@ -544,20 +744,34 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
     place(0, prev, dec0)
     del dec0
 
-    # every later piece is encoded now, in one go, so the text encoder comes back only once
+    # fingerprints: shots first, then bridges (a bridge's includes its two shots'). The still is identified
+    # by the render it was cut from, so a cached shot 1 gives the same still fingerprint every run.
+    still_from = (fps[0][1] or fps[0][0]) if use_still else None
+    for i in list(range(2, P, 2)) + list(range(1, P, 2)):
+        fingerprint(i, still_from)
+
+    # every later piece that has to be rendered is encoded now, in one go, so the text encoder comes back
+    # only once. Pieces coming from the cache aren't encoded at all.
     enc, seen = {}, {}
     for i in range(1, P):
         p = pieces[i]
+        if use_cache and cached(i):
+            continue
         key = (p["text"], p["frames"], tuple(p["pics"]), p["video"], p["audio"])
         if key not in seen:  # pieces with the same words, length and media share one encode
             seen[key] = encode(p, still)
             _mark(f"encode piece {i + 1}/{P}")
         enc[i] = seen[key]
 
+    def get_enc(i):
+        if i not in enc:  # the cache file went away between the check and the render
+            enc[i] = encode(pieces[i], still)
+        return enc[i]
+
     for i in range(2, P, 2):
         comfy.model_management.throw_exception_if_processing_interrupted()
-        cur = render_shot(i, enc[i])
-        br = render_bridge(i - 1, enc[i - 1], prev, cur)
+        cur = render_shot(i, lambda: get_enc(i))
+        br = render_bridge(i - 1, lambda: get_enc(i - 1), prev, cur)
         if color:
             cur_dec = decode(cur)
             br_dec = colorfix(i - 1, decode(br), cur_dec[0])
@@ -578,4 +792,10 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
     frames_out = st["sink"].finish(final_audio)
     if st["sink"].path:
         plan += f"\n  full video: {st['sink'].path}"
+    if use_cache:
+        line = (f"rendered {len(used['rendered'])} of {P} pieces"
+                + (f" ({', '.join(used['rendered'])})" if used["rendered"] else "")
+                + (f"; from the piece cache: {', '.join(used['cached'])}" if used["cached"] else ""))
+        plan += "\n  " + line
+        print(f"{tag} {line}")
     return frames_out, final_audio, plan

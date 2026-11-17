@@ -3,3 +3,4 @@ mask_cache/
 lab.json
 *.pre-*
 transcript_cache/
+piece_cache/
