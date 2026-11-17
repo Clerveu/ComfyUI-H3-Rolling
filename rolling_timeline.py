@@ -394,6 +394,10 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
     for i, p in enumerate(pieces):
         p["lead"] = runup if (i % 2 == 0 and i > 0) else 0
         p["render"] = p["frames"] + p["lead"]
+        # The reference video is read as a source as long as the whole timeline, looping if it is shorter:
+        # each piece gets the frames that fall where it sits (its run-up included). A looping motion
+        # reference (a run cycle) then drives every piece at one pace and in step with its neighbours.
+        p["vstart"] = (starts[i] - p["lead"]) % ref_video.shape[0] if ref_video is not None else 0
 
     def name(i):
         return f"shot {i // 2 + 1}" if i % 2 == 0 else f"bridge {(i + 1) // 2}"
@@ -504,7 +508,7 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
         text, _ = resolved(p, still_from is not None)
         s_lo, s_hi = seeds(i)
         lo = [p["kind"], common, text, p["render"], s_lo, [pic_ids[j] for j in p["pics"]],
-              vid_id if p["video"] else None, aud_id if p["audio"] else None,
+              [vid_id, p["vstart"]] if p["video"] else None, aud_id if p["audio"] else None,
               still_from if p["still"] else None]
         if i % 2:
             lo += [pin_of(i), fps[i - 1][0], fps[i + 1][0]] + ([pieces[i + 1]["lead"]] if pieces[i + 1]["lead"] else [])
@@ -552,7 +556,8 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
             clip=clip, prompt=with_still(p["text"], still_tag), width=w, height=h, length=p["render"],
             ref_image_size=ref_image_size, vae=vae, audio_vae=audio_vae,
             ref_images={f"ref_image_{j + 1}": im for j, im in enumerate(images)} or None,
-            ref_videos={"ref_video_1": ref_video} if p["video"] else None,
+            ref_videos={"ref_video_1": ref_video[[(p["vstart"] + t) % ref_video.shape[0] for t in range(p["render"])]]}
+            if p["video"] else None,
             ref_audios={"ref_audio_1": ref_audio} if p["audio"] else None)
         return out.args
 
