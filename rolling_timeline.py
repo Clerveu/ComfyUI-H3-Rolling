@@ -730,8 +730,13 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
     dec0 = decode(prev)
     still = None
     if use_still:
-        mid = dec0[0].shape[0] // 2
-        still = dec0[0][mid:mid + 1].clone()
+        # always cut from the first stage, upscaled run or not: the later pieces are then handed the same
+        # picture either way, so turning the upscale on reuses every cached first-stage piece (and keeps
+        # the performance that was approved at preview size)
+        src = dec0[0] if prev["hi"] is None else decode({"lo": prev["lo"], "hi": None})[0]
+        mid = src.shape[0] // 2
+        still = src[mid:mid + 1].clone()
+        del src
         try:
             from PIL import Image
             d = os.path.join(folder_paths.get_output_directory(), "h3_rolling")
@@ -746,7 +751,7 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
 
     # fingerprints: shots first, then bridges (a bridge's includes its two shots'). The still is identified
     # by the render it was cut from, so a cached shot 1 gives the same still fingerprint every run.
-    still_from = (fps[0][1] or fps[0][0]) if use_still else None
+    still_from = fps[0][0] if use_still else None
     for i in list(range(2, P, 2)) + list(range(1, P, 2)):
         fingerprint(i, still_from)
 
