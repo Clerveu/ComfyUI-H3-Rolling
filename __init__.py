@@ -6,7 +6,7 @@ import os
 import comfy.samplers
 import folder_paths
 
-from . import rolling_anchor, rolling_core, rolling_gen
+from . import rolling_anchor, rolling_core, rolling_gen, rolling_timeline
 
 VIDEO_EXTS = (".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v")
 
@@ -367,16 +367,123 @@ class H3RollingAnchors:
             sampler=sampler, sigmas=sigmas)
 
 
+TIMELINE_PROMPT = """subject_definitions:
+<Subject 1> is the woman whose appearance comes from <Picture 1>.
+<Subject 2> is the room in <Picture 2>.
+{still} shows how the camera frames <Subject 2>.
+
+summary:
+[reference generation] {beat}
+
+retention_analysis:
+<Subject 1> (throughout [Shot 1]): fully_preserved - her face, hair, build and clothing from <Picture 1>.
+<Subject 2> (throughout [Shot 1]): fully_preserved - the room, its furniture and its light from <Picture 2>.
+{still}: attribute_transfer - the camera's framing of the room, and how large <Subject 1> is in the frame.
+
+detailed_description:
+Photorealistic live-action footage, filmed by a static camera.
+
+[Shot 1] A full-length view of <Subject 1> in <Subject 2>. {beat}
+
+overall_soundscape:
+Quiet room tone.
+
+non_diegetic_music:
+N/A"""
+
+
+class H3RollingTimeline:
+    """A long H3 video from pictures and prompts, no source video. The video is a list of pieces: shots rendered
+    on their own, and bridges pinned between each pair of shots. Nothing is ever rendered from a bridge.
+    Leave the timeline box empty and it is built from the simple fields (one prompt, N shots)."""
+
+    CATEGORY = "MiniMax H3/rolling"
+    RETURN_TYPES = ("IMAGE", "AUDIO", "STRING")
+    RETURN_NAMES = ("frames", "audio", "plan")
+    FUNCTION = "run"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        optional = {
+            "sampler": ("SAMPLER", {"tooltip": "Overrides sampler_name"}),
+            "sigmas": ("SIGMAS", {"tooltip": "Overrides steps + scheduler"}),
+        }
+        for i in range(1, 10):
+            optional[f"picture_{i}"] = ("IMAGE",)
+        optional["ref_video"] = ("IMAGE", {"tooltip": "Reference video frames at 24 fps (2-15s): <Video 1> in the prompt."})
+        optional["ref_audio"] = ("AUDIO", {"tooltip": "Standalone reference audio: <Audio 1> in the prompt."})
+        return {
+            "required": {
+                "model": ("MODEL",),
+                "clip": ("CLIP",),
+                "vae": ("VAE", {"tooltip": "Video VAE"}),
+                "audio_vae": ("VAE", {"tooltip": "Audio VAE"}),
+                "prompt": ("STRING", {"multiline": True, "default": TIMELINE_PROMPT,
+                                      "tooltip": "The prompt every piece shares. {beat} is replaced by the piece's beat. {still} is the tag of a frame taken from shot 1 and given to later pieces as an extra picture; lines that mention {still} are left out of shot 1's own prompt. Leave {still} out and no frame is taken."}),
+                "beat": ("STRING", {"multiline": True, "default": "<Subject 1> dances in place.",
+                                    "tooltip": "What happens, for every piece that doesn't have a beat of its own in the timeline."}),
+                "shots": ("INT", {"default": 4, "min": 1, "max": 500,
+                                  "tooltip": "Simple mode: how many shots. There is one bridge between each pair. Ignored when the timeline box has something in it."}),
+                "shot_seconds": ("FLOAT", {"default": 0.9, "min": 0.9, "max": 15.0, "step": 0.1,
+                                           "tooltip": "Default length of a shot. 0.9 = a 22-frame anchor; 5+ = a full clip. Snapped to H3's 17k+5 frames."}),
+                "bridge_seconds": ("FLOAT", {"default": 5.0, "min": 0.9, "max": 15.0, "step": 0.25,
+                                             "tooltip": "Default length of a bridge, including the 5 frames it shares with the shot on each side."}),
+                "timeline": ("STRING", {"multiline": True, "default": "",
+                                        "tooltip": "Empty = shots x (shot + bridge) on the defaults above. Otherwise JSON: a list of pieces going shot, bridge, shot ... shot. Each is {\"kind\": \"shot\" or \"bridge\"} plus only what differs from the defaults: \"seconds\" or \"frames\", \"beat\", \"prompt\" (a whole prompt of its own), \"media\" (a list of picture_1 ... picture_9, video, audio), \"seed\". The plan output prints the timeline that was used, ready to paste here and edit."}),
+                "width": ("INT", {"default": 864, "min": 256, "max": 2048, "step": 32}),
+                "height": ("INT", {"default": 480, "min": 256, "max": 2048, "step": 32}),
+                "steps": ("INT", {"default": 6, "min": 1, "max": 100}),
+                "sampler_name": (comfy.samplers.KSampler.SAMPLERS, {"default": "er_sde"}),
+                "scheduler": (comfy.samplers.KSampler.SCHEDULERS, {"default": "beta"}),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "control_after_generate": True,
+                                 "tooltip": "Shot N uses seed + N - 1; bridge N uses seed + 50000 + N - 1. A piece can set its own."}),
+                "ref_image_size": (["match", "max"], {"default": "max"}),
+                "pin_mode": (["mask", "keyframe"], {"default": "mask",
+                                                    "tooltip": "How a bridge holds the 5 frames it shares with each shot. mask: the shots' real latents are written into the bridge and masked off, so they decode as the shots' own frames and the joins are plain cuts. keyframe: passed as H3 keyframe guides; the bridge draws its own copy and the joins are 5-frame crossfades."}),
+                "soundtrack": (["generated", "silent"], {"default": "generated"}),
+                "upscale_pass": ("BOOLEAN", {"default": False,
+                                             "tooltip": "Per piece: latent-upscale with the Minimax H3 3D upscaler, then a short polish pass. Bridges are pinned to the upscaled shots."}),
+                "upscale_megapixels": ("FLOAT", {"default": 1.5, "min": 0.2, "max": 4.0, "step": 0.1}),
+                "upscale_steps": ("INT", {"default": 2, "min": 1, "max": 30}),
+                "upscale_denoise": ("FLOAT", {"default": 0.4, "min": 0.05, "max": 1.0, "step": 0.05}),
+                "frame_labels": ("BOOLEAN", {"default": False,
+                                             "tooltip": "Burn in which piece and which frame of it every frame is (shot / shared pin / bridge), plus the frame number and time. For review."}),
+            },
+            "optional": optional,
+        }
+
+    def run(self, model, clip, vae, audio_vae, prompt, beat, shots, shot_seconds, bridge_seconds, timeline, width,
+            height, steps, sampler_name, scheduler, seed, ref_image_size, pin_mode="mask", soundtrack="generated",
+            upscale_pass=False, upscale_megapixels=1.5, upscale_steps=2, upscale_denoise=0.4, frame_labels=False,
+            sampler=None, sigmas=None, ref_video=None, ref_audio=None, **pictures):
+        import json
+        importlib.reload(rolling_core)
+        importlib.reload(rolling_timeline)
+        tl = timeline.strip() or rolling_timeline.simple_timeline(shots)
+        frames, audio, plan = rolling_timeline.run_timeline(
+            model, clip, vae, audio_vae, tl, prompt, beat, round(shot_seconds * rolling_core.FPS),
+            round(bridge_seconds * rolling_core.FPS), width, height, steps, sampler_name, scheduler, seed,
+            ref_image_size, pin_mode=pin_mode, soundtrack=soundtrack, upscale_pass=upscale_pass,
+            upscale_megapixels=upscale_megapixels, upscale_steps=upscale_steps, upscale_denoise=upscale_denoise,
+            frame_labels=frame_labels, pictures=[pictures.get(f"picture_{i}") for i in range(1, 10)],
+            ref_video=ref_video, ref_audio=ref_audio, sampler=sampler, sigmas=sigmas)
+        if not timeline.strip():
+            plan += "\n  timeline used (paste into the timeline box to edit single pieces):\n  " + json.dumps(tl["pieces"])
+        return frames, audio, plan
+
+
 NODE_CLASS_MAPPINGS = {
     "H3RollingSource": H3RollingSource,
     "H3RollingRef2VA": H3RollingRef2VA,
     "H3RollingGenerate": H3RollingGenerate,
     "H3RollingAnchors": H3RollingAnchors,
+    "H3RollingTimeline": H3RollingTimeline,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "H3RollingSource": "H3 Rolling Source (scrub)",
     "H3RollingRef2VA": "H3 Rolling Ref2VA",
     "H3RollingGenerate": "H3 Rolling Generate (Geiru chain)",
     "H3RollingAnchors": "H3 Rolling Anchors (beats + bridges)",
+    "H3RollingTimeline": "H3 Rolling Timeline (shots + bridges)",
 }
 WEB_DIRECTORY = "./web"
