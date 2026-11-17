@@ -479,6 +479,19 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
 
         ca = curve(imgs[f0:f0 + k], st["sink"].get(b0 + f0 - k, b0 + f0))
         cb = curve(imgs[f1 - k:f1], b_imgs[:k])
+
+        # The ease is for the small brightness step between frames of one continuous picture. If an end of
+        # the bridge shows a different picture from its shot (the bridge cut to another framing), the curve
+        # would "correct" one image toward another, so that end is left alone.
+        def sane(c, end):
+            shift = float(np.mean([np.abs(y - x).mean() for x, y in c])) * 255
+            if shift <= 6:
+                return c
+            print(f"{tag} {name(i)}: its {end} frames differ from the shot's by {shift:.1f} levels, which is a "
+                  f"different picture, not a brightness step; no color ease at that end")
+            return [(x, x) for x, _ in c]
+
+        ca, cb = sane(ca, "first free"), sane(cb, "last free")
         out = imgs.clone()
         n = f1 - f0
         for f in range(f0, f1):
