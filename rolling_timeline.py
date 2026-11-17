@@ -317,6 +317,23 @@ def cache_get(fp):
     return d["v"], d["a"]
 
 
+def note_get(fp):
+    """A small JSON note kept beside a cached piece (its landing score)."""
+    if fp is None:
+        return None
+    try:
+        with open(os.path.join(_cache_dir(), fp + ".note.json"), encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def note_put(fp, data):
+    if fp is not None:
+        with open(os.path.join(_cache_dir(), fp + ".note.json"), "w", encoding="utf-8") as f:
+            json.dump(data, f)
+
+
 def cache_put(fp, v, a, budget=8 * 2**30):
     d = _cache_dir()
     tmp = os.path.join(d, fp + ".tmp")
@@ -482,6 +499,25 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
 
     used = {"rendered": [], "upscaled": [], "cached": []}
 
+    # Landing check. A bridge has to arrive on frames that already exist, and with periodic motion (a run)
+    # it can arrive out of step: the picture jumps where its free frames meet the pinned ones. With
+    # landing_tries > 1 each bridge is scored as soon as its first stage is done, and one that lands hard is
+    # rendered again on another seed (first stage only, the shots are untouched); the best landing is kept.
+    land_tries = max(1, int(lab.get("landing_tries", 1)))
+    land_limit = float(lab.get("landing_limit", 1.35))
+    landings = []
+
+    def landing(lo, bl):
+        """(worst, start, end): the change across each seam inside the bridge over the normal frame-to-frame
+        change in its free part. About 1 = the motion carries straight through. Measured on a small decode."""
+        imgs = nodes.VAEDecode().decode(vae, {"samples": lo})[0][:, ::4, ::4].float().cpu()
+        d = (imgs[1:] - imgs[:-1]).abs().mean(dim=(1, 2, 3))  # d[t - 1] = the change going into frame t
+        norm = max(float(d[PIN + 1:bl - PIN - 2].median()), 1e-6)
+        start, end = float(d[PIN - 1]) / norm, float(d[bl - PIN - 1]) / norm
+        # a first free frame that repeats the pin is a stutter: count it as a miss too
+        held_frame = land_limit * 0.35 / max(start, 1e-3) if start < 0.35 else 0.0
+        return [max(end, start, held_frame), start, end]
+
     def encode(p, still):
         images = [pics[j] for j in p["pics"]]
         still_tag = None
@@ -593,18 +629,45 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
         s_lo, s_hi = seeds(i)
         bl = pieces[i]["frames"]
         fresh = fresh_lo = False
-        lo = load(f_lo)
-        if lo is None:
+
+        def first_stage(sd):
             cond, latent = enc()
             at = latent["samples"].unbind()[1].shape[-1]
             if pin_mode == "mask":
                 start, mask = held(latent["samples"], a["lo"], a["len"], b["lo"], bl)
-                lo = sample(cond, start, sigmas, s_lo, mask)
-            else:
-                lo = sample(pins(cond, a["lo"], a["len"], b["lo"], bl, at), latent["samples"], sigmas, s_lo)
-            keep(f_lo, lo)
-            fresh = fresh_lo = True
-            _mark(f"{name(i)} sample")
+                return sample(cond, start, sigmas, sd, mask)
+            return sample(pins(cond, a["lo"], a["len"], b["lo"], bl, at), latent["samples"], sigmas, sd)
+
+        cands = []
+        for k in range(land_tries):
+            fk = f_lo if k == 0 or f_lo is None else _fp(f_lo, "landing", k)
+            cand = load(fk)
+            if cand is None:
+                cand = first_stage(s_lo + 7919 * k)
+                keep(fk, cand)
+                fresh = fresh_lo = True
+                _mark(f"{name(i)} sample" + (f" (landing try {k + 1})" if k else ""))
+            if land_tries == 1:
+                cands.append(([0.0, 0.0, 0.0], k, cand))
+                break
+            score = note_get(fk)
+            if score is None:
+                score = landing(cand, bl)
+                note_put(fk, score)
+            cands.append((score, k, cand))
+            if score[0] <= land_limit:
+                break
+        score, k, lo = min(cands, key=lambda c: c[0][0])
+        if land_tries > 1:
+            first = cands[0][0]
+            landings.append((name(i), first, score, k, len(cands)))
+            print(f"{tag} {name(i)} landing: leaves its start pin at {first[1]:.2f}x normal, reaches its end pin at "
+                  f"{first[2]:.2f}x" + (f" -> kept try {k + 1} of {len(cands)}: {score[1]:.2f}x / {score[2]:.2f}x"
+                                        if len(cands) > 1 else ""))
+        if k:  # the upscale of a re-rolled bridge is its own cached piece
+            f_hi = _fp(f_hi, "landing", k) if f_hi is not None else None
+            s_hi += 7919 * k
+        del cands
         hi = None
         if upscaler:
             hi = load(f_hi)
@@ -760,7 +823,7 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
     enc, seen = {}, {}
     for i in range(1, P):
         p = pieces[i]
-        if use_cache and cached(i):
+        if use_cache and cached(i) and not (land_tries > 1 and i % 2):
             continue
         key = (p["text"], p["frames"], tuple(p["pics"]), p["video"], p["audio"])
         if key not in seen:  # pieces with the same words, length and media share one encode
@@ -802,6 +865,13 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
                 + (f" ({', '.join(used['rendered'])})" if used["rendered"] else "")
                 + (f"; upscaled from a cached first stage: {', '.join(used['upscaled'])}" if used["upscaled"] else "")
                 + (f"; from the piece cache: {', '.join(used['cached'])}" if used["cached"] else ""))
+        plan += "\n  " + line
+        print(f"{tag} {line}")
+    if landings:
+        redone = [x for x in landings if x[4] > 1]
+        line = (f"landing check (limit {land_limit}x, up to {land_tries} tries): {len(landings) - len(redone)} of "
+                f"{len(landings)} bridges landed first time"
+                + "".join(f"\n    {n}: {f[0]:.2f}x -> {sc[0]:.2f}x (try {k + 1} of {t})" for n, f, sc, k, t in redone))
         plan += "\n  " + line
         print(f"{tag} {line}")
     return frames_out, final_audio, plan
