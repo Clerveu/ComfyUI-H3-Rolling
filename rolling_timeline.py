@@ -89,7 +89,7 @@ def parse_timeline(timeline, prompt, beat, shot_frames, bridge_frames):
         else:
             asked = int(lens[kind])
         frames = align(max(asked, MIN_LEN))
-        if frames != asked:
+        if frames != asked and ("frames" in p or "seconds" in p):  # only a length the piece itself asked for
             notes.append(f"piece {i + 1} ({kind}): {asked} frames -> {frames} (lengths are 17k+5, at least {MIN_LEN})")
         text = p.get("prompt", prompt)
         b = p.get("beat", beat)
