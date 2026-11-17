@@ -382,6 +382,19 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
     _T[0] = 0.0
     _mark("start")
 
+    # Run-up. H3 doesn't always start a clip in motion: the first few frames of a shot can hesitate (a held
+    # frame at 0->1, sometimes again at 5->6), which nobody sees at the head of a standalone clip but which
+    # is exactly what a bridge is asked to arrive on. With a run-up, each shot after the first renders that
+    # many extra frames at its start, the bridge arrives on the frames right after them (the shot in full
+    # motion, same as the frames a bridge leaves from), and the run-up is never shown.
+    # A piece's "frames" stays the length that is shown; "render" is what H3 makes.
+    runup = int(lab.get("runup", 0))
+    if runup % 17:
+        raise ValueError(f"runup {runup}: it has to be a multiple of 17 frames (H3's block size) so the pins line up")
+    for i, p in enumerate(pieces):
+        p["lead"] = runup if (i % 2 == 0 and i > 0) else 0
+        p["render"] = p["frames"] + p["lead"]
+
     def name(i):
         return f"shot {i // 2 + 1}" if i % 2 == 0 else f"bridge {(i + 1) // 2}"
 
@@ -432,6 +445,8 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
     plan = (f"{N} shot(s) of {'/'.join(map(str, shot_lens))} frames"
             + (f" + {N - 1} bridge(s) of {'/'.join(map(str, bridge_lens))} frames" if N > 1 else "")
             + f" at {w}x{h} -> {F} frames ({F / FPS:.2f}s) | pins {PIN}+{PIN} ({pin_mode})"
+            + (f" | run-up: every shot after the first renders {runup} extra frames at its start that aren't shown"
+               if runup else "")
             + (" | a frame of shot 1 is an extra picture for every later piece whose prompt says {still}"
                if use_still else "")
             + (f" | upscale to {upscale_megapixels} MP with {up_model}, {upscale_steps} steps @ {upscale_denoise}"
@@ -488,11 +503,11 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
         p = pieces[i]
         text, _ = resolved(p, still_from is not None)
         s_lo, s_hi = seeds(i)
-        lo = [p["kind"], common, text, p["frames"], s_lo, [pic_ids[j] for j in p["pics"]],
+        lo = [p["kind"], common, text, p["render"], s_lo, [pic_ids[j] for j in p["pics"]],
               vid_id if p["video"] else None, aud_id if p["audio"] else None,
               still_from if p["still"] else None]
         if i % 2:
-            lo += [pin_of(i), fps[i - 1][0], fps[i + 1][0]]
+            lo += [pin_of(i), fps[i - 1][0], fps[i + 1][0]] + ([pieces[i + 1]["lead"]] if pieces[i + 1]["lead"] else [])
         lo = _fp(*lo)
         hi = None
         if upscaler:
@@ -534,7 +549,7 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
             images = images + [still]
             still_tag = f"<Picture {len(images)}>"
         out = MiniMaxH3ReferenceToVideo.execute(
-            clip=clip, prompt=with_still(p["text"], still_tag), width=w, height=h, length=p["frames"],
+            clip=clip, prompt=with_still(p["text"], still_tag), width=w, height=h, length=p["render"],
             ref_image_size=ref_image_size, vae=vae, audio_vae=audio_vae,
             ref_images={f"ref_image_{j + 1}": im for j, im in enumerate(images)} or None,
             ref_videos={"ref_video_1": ref_video} if p["video"] else None,
@@ -558,7 +573,7 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
         res = getattr(res, "args", None) or res.result
         return NT((res[0]["samples"], audio_lat))
 
-    def held(samples, a_lat, a_len, b_lat, bl):
+    def held(samples, a_lat, a_len, b_lat, bl, lead=0):
         """mask pins: the left shot's last 5 frames and the right shot's first 5 written straight into the
         bridge's own starting latent and masked 0, so the sampler keeps them and they decode as the shots'
         own frames (roycho87's Geiru Context / Anchoring method, here into a piece nothing is rendered from)."""
@@ -570,7 +585,8 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
         t = v.shape[2]
         v[:, :, :n] = av[:, :, -n:].to(v)
         mv[:, :, :n] = 0
-        v[:, :, t - n:] = bv[:, :, :n].to(v)
+        o = lead // 17 * 5  # latents in the right shot's run-up
+        v[:, :, t - n:] = bv[:, :, o:o + n].to(v)
         mv[:, :, t - n:] = 0
         a0 = round((a_len - PIN) * FRAME_RESCALE)
         src = aa[..., a0:a0 + na]
@@ -578,13 +594,14 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
         a[..., :k0] = src[..., :k0].to(a)
         ma[..., :k0] = 0
         b0 = round(FRAME_RESCALE * (bl - PIN))
-        k1 = max(0, min(na, a.shape[-1] - b0, ba.shape[-1]))
+        ao = round(lead * FRAME_RESCALE)
+        k1 = max(0, min(na, a.shape[-1] - b0, ba.shape[-1] - ao))
         if k1:
-            a[..., b0:b0 + k1] = ba[..., :k1].to(a)
+            a[..., b0:b0 + k1] = ba[..., ao:ao + k1].to(a)
             ma[..., b0:b0 + k1] = 0
         return NT((v, a)), NT((mv, ma))
 
-    def pins(cond, a_lat, a_len, b_lat, bl, bridge_audio_t):
+    def pins(cond, a_lat, a_len, b_lat, bl, bridge_audio_t, lead=0):
         """keyframe pins: the same latents passed as H3 keyframe guides; the bridge draws its own copy."""
         av, aa = a_lat.unbind()[:2]
         bv, ba = b_lat.unbind()[:2]
@@ -593,10 +610,11 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
         kfs = list(cond[0][1].get("minimax_keyframes", []))
         kfs.append({"resolved_frame_index": 0, "latent": av[:, :, -n:].clone(),
                     "audio_latent": aa[..., a0:a0 + na].clone()})
-        end = {"resolved_frame_index": bl - PIN, "latent": bv[:, :, :n].clone()}
+        o, ao = lead // 17 * 5, round(lead * FRAME_RESCALE)
+        end = {"resolved_frame_index": bl - PIN, "latent": bv[:, :, o:o + n].clone()}
         room = math.floor(bridge_audio_t - FRAME_RESCALE * (bl - PIN))
         if room > 0:
-            end["audio_latent"] = ba[..., :min(na, room)].clone()
+            end["audio_latent"] = ba[..., ao:ao + min(na, room)].clone()
         kfs.append(end)
         return node_helpers.conditioning_set_values(cond, {"minimax_keyframes": kfs})
 
@@ -609,15 +627,16 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
             v, a = samples.unbind()[:2]
             cache_put(fp, v, a)
 
-    def end_guide(cond, b_lat, bl, bridge_audio_t):
+    def end_guide(cond, b_lat, bl, bridge_audio_t, lead=0):
         """Only the arrival as an H3 guide clip: the right shot's first 5 frames anchored at the bridge's last 5."""
         bv, ba = b_lat.unbind()[:2]
         n = video_latent_t(PIN)
         kfs = list(cond[0][1].get("minimax_keyframes", []))
-        end = {"resolved_frame_index": bl - PIN, "latent": bv[:, :, :n].clone()}
+        o, ao = lead // 17 * 5, round(lead * FRAME_RESCALE)
+        end = {"resolved_frame_index": bl - PIN, "latent": bv[:, :, o:o + n].clone()}
         room = math.floor(bridge_audio_t - FRAME_RESCALE * (bl - PIN))
         if room > 0:
-            end["audio_latent"] = ba[..., :min(na, room)].clone()
+            end["audio_latent"] = ba[..., ao:ao + min(na, room)].clone()
         kfs.append(end)
         return node_helpers.conditioning_set_values(cond, {"minimax_keyframes": kfs})
 
@@ -643,7 +662,7 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
                 fresh = True
                 _mark(f"{name(i)} upscale+polish")
         used["rendered" if fresh_lo else "upscaled" if fresh else "cached"].append(name(i))
-        return {"lo": lo, "hi": hi, "len": pieces[i]["frames"]}
+        return {"lo": lo, "hi": hi, "len": pieces[i]["frames"], "rlen": pieces[i]["render"], "lead": pieces[i]["lead"]}
 
     def render_bridge(i, enc, a, b):
         f_lo, f_hi = fps[i]
@@ -656,11 +675,11 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
             cond, latent = enc()
             at = latent["samples"].unbind()[1].shape[-1]
             if pm.startswith("mask"):
-                start, mask = held(latent["samples"], a["lo"], a["len"], b["lo"], bl)
+                start, mask = held(latent["samples"], a["lo"], a["rlen"], b["lo"], bl, b["lead"])
                 if pm == "mask_endguide":
-                    cond = end_guide(cond, b["lo"], bl, at)
+                    cond = end_guide(cond, b["lo"], bl, at, b["lead"])
                 return sample(cond, start, sigmas, sd, mask)
-            return sample(pins(cond, a["lo"], a["len"], b["lo"], bl, at), latent["samples"], sigmas, sd)
+            return sample(pins(cond, a["lo"], a["rlen"], b["lo"], bl, at, b["lead"]), latent["samples"], sigmas, sd)
 
         cands = []
         for k in range(land_tries):
@@ -700,12 +719,12 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
                 at = latent["samples"].unbind()[1].shape[-1]
                 big = upscale(lo)
                 if pm.startswith("mask"):
-                    big, mask = held(big, a["hi"], a["len"], b["hi"], bl)
+                    big, mask = held(big, a["hi"], a["rlen"], b["hi"], bl, b["lead"])
                     if pm == "mask_endguide":
-                        cond = end_guide(cond, b["hi"], bl, at)
+                        cond = end_guide(cond, b["hi"], bl, at, b["lead"])
                     hi = sample(cond, big, up_sigmas, s_hi, mask)
                 else:
-                    hi = sample(pins(cond, a["hi"], a["len"], b["hi"], bl, at), big, up_sigmas, s_hi)
+                    hi = sample(pins(cond, a["hi"], a["rlen"], b["hi"], bl, at, b["lead"]), big, up_sigmas, s_hi)
                 keep(f_hi, hi)
                 fresh = True
                 _mark(f"{name(i)} upscale+polish")
@@ -716,7 +735,11 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
         samples = r["hi"] if r["hi"] is not None else r["lo"]
         imgs = nodes.VAEDecode().decode(vae, {"samples": samples})[0].float().cpu()
         aud = vae_decode_audio(audio_vae, {"samples": samples})
-        return imgs, aud["waveform"].float().cpu(), aud["sample_rate"]
+        wf, sr = aud["waveform"].float().cpu(), aud["sample_rate"]
+        lead = r.get("lead", 0)
+        if lead:
+            imgs, wf = imgs[lead:], wf[..., round(lead / FPS * sr):]
+        return imgs, wf, sr
 
     st = {"sink": None, "audio": None, "sr": None, "stamped": 0}
 
@@ -851,7 +874,7 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
         p = pieces[i]
         if use_cache and cached(i) and not (land_tries > 1 and i % 2):
             continue
-        key = (p["text"], p["frames"], tuple(p["pics"]), p["video"], p["audio"])
+        key = (p["text"], p["render"], tuple(p["pics"]), p["video"], p["audio"])
         if key not in seen:  # pieces with the same words, length and media share one encode
             seen[key] = encode(p, still)
             _mark(f"encode piece {i + 1}/{P}")
