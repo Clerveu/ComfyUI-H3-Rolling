@@ -32,13 +32,17 @@ def _geiru():
     if missing:
         raise RuntimeError("H3 Rolling Generate needs roycho87's geiru_context_suite in custom_nodes "
                            f"(missing: {', '.join(missing)}): https://github.com/roycho87/geiru_context_suite")
-    return {k: v() for k, v in found.items()}
+    out = {k: v() for k, v in found.items()}
+    attn = nodes.NODE_CLASS_MAPPINGS.get("GeiruKeystoneAttention")  # suite 1.1 and later
+    out["attention"] = attn() if attn else None
+    return out
 
 
 def run_generate(model, clip, vae, audio_vae, prompts, width, height, clip_seconds, clips, head_frames, drop_last,
                  steps, sampler_name, scheduler, seed, ref_image_size, hold_audio=True, protection=True,
                  keystone="keystone front + capstone back", late_lock_step=4, late_lock_slots=LATE_LOCK_SLOTS[0],
-                 context_noise=1.0, soundtrack="generated", pictures=(), sampler=None, sigmas=None):
+                 context_noise=1.0, soundtrack="generated", pictures=(), sampler=None, sigmas=None,
+                 keystone_attention=20.0):
     import comfy.model_management
     import comfy.samplers
     import nodes
@@ -65,7 +69,8 @@ def run_generate(model, clip, vae, audio_vae, prompts, width, height, clip_secon
     plan = (f"{N} clip(s) of {L} frames ({L / FPS:.2f}s) at {w}x{h}, overlap {head} (held {head - drop}, free {drop})"
             f" -> {F} frames ({F / FPS:.2f}s) | {len(texts)} prompt(s)"
             + (" | protection off" if not protection else
-               f" | keystone: {keystone}, late lock step {late_lock_step} ({late_lock_slots}), context noise {context_noise}"))
+               f" | keystone: {keystone}, late lock step {late_lock_step} ({late_lock_slots}), context noise {context_noise}"
+               f", keystone attention x{keystone_attention:g}"))
     print(f"[H3 Rolling Generate] {plan}")
 
     # 1) encode each distinct prompt once, so the text encoder loads once
@@ -103,7 +108,14 @@ def run_generate(model, clip, vae, audio_vae, prompts, width, height, clip_secon
             if keystone != "off":
                 latent, mdl = g["keystone"].graft(latent, enabled=True, keyframe=first, shot_number=shot,
                                                   placement=keystone, model=mdl, source_clip=1, latent_folder="")
+                keystone_latent = latent  # Keystone's av_latent: tells Keystone Attention which latents are the keystone
                 mdl, latent = g["late_lock"].patch(mdl, latent, swap_step=late_lock_step, slots=late_lock_slots)
+                if keystone_attention > 0 and abs(keystone_attention - 1.0) > 1e-6:
+                    if g["attention"] is None:
+                        if k == 1:
+                            print("[H3 Rolling Generate] Geiru Keystone Attention isn't installed (suite older than 1.1): skipped")
+                    else:  # last model patch, right before the guider, as its tooltip asks
+                        mdl = g["attention"].patch(mdl, keystone_latent, keystone_attention, "lighting blocks", "", True)[0]
         _mark(f"clip {k + 1} setup")
 
         guider = Guider_Basic(mdl)

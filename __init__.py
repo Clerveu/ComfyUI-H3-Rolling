@@ -248,6 +248,8 @@ class H3RollingGenerate:
                 "context_noise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05,
                                             "tooltip": "Geiru Context Noise: how much of the current noise the held frames get, fading to none at the join. 0 = off."}),
                 "soundtrack": (["generated", "silent"], {"default": "generated"}),
+                "keystone_attention": ("FLOAT", {"default": 20.0, "min": 0.0, "max": 1000.0, "step": 0.5,
+                                                 "tooltip": "Geiru Keystone Attention (suite 1.1+): how hard each clip looks at the keystone compared with the carried frames, in the 13 blocks he found carry brightness. 20 is his default. 1 or 0 = off."}),
             },
             "optional": {
                 "sampler": ("SAMPLER", {"tooltip": "Overrides sampler_name"}),
@@ -262,7 +264,7 @@ class H3RollingGenerate:
     def run(self, model, clip, vae, audio_vae, prompts, width, height, clip_seconds, clips, overlap_frames, drop_last,
             steps, sampler_name, scheduler, seed, ref_image_size, hold_audio=True, degradation_protection=True,
             keystone=rolling_gen.KEYSTONE_PLACEMENTS[0], late_lock_step=4, late_lock_slots=rolling_gen.LATE_LOCK_SLOTS[0],
-            context_noise=1.0, soundtrack="generated", sampler=None, sigmas=None,
+            context_noise=1.0, soundtrack="generated", keystone_attention=20.0, sampler=None, sigmas=None,
             picture_1=None, picture_2=None, picture_3=None, picture_4=None):
         importlib.reload(rolling_core)
         importlib.reload(rolling_gen)
@@ -271,7 +273,8 @@ class H3RollingGenerate:
             int(drop_last), steps, sampler_name, scheduler, seed, ref_image_size, hold_audio=hold_audio,
             protection=degradation_protection, keystone=keystone, late_lock_step=late_lock_step,
             late_lock_slots=late_lock_slots, context_noise=context_noise, soundtrack=soundtrack,
-            pictures=(picture_1, picture_2, picture_3, picture_4), sampler=sampler, sigmas=sigmas)
+            pictures=(picture_1, picture_2, picture_3, picture_4), sampler=sampler, sigmas=sigmas,
+            keystone_attention=keystone_attention)
 
 
 ANCHOR_PROMPT = """subject_definitions:
