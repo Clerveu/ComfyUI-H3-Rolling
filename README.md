@@ -30,6 +30,31 @@ Small things I didn't find written down elsewhere. They may well be known.
 - **A short shot between two bridges.** One long action (writing two lines) split into two bridges with a 1.5 second shot between them, whose only job is the motion between the halves. It reads as a breath, not a pause.
 - **A number behind landing 17 frames in.** Roy recommends freeing the first 17 frames of the next shot (`drop_first 17` on Geiru Anchoring) so motion carries. I measured why on a running subject: averaged over 15 joins, the very first frame-to-frame step of a freshly rendered H3 clip moved as little as 0.08 of the normal amount, and there was often a second held frame at 5 to 6. A bridge arriving on those frames slows into them and then jumps. Arriving 17 frames later fixed it. This node always does that (it renders every shot after the first with 17 extra frames at the start, arrives after them, and never shows them).
 
+## Clips
+
+Most of these have a label burned into the corner: which piece each frame belongs to (shot or bridge), the frame number inside it, and the frames a bridge shares with a shot in yellow.
+
+**The chalkboard storyboard** (3 shots, 2 bridges, 35 seconds, upscaled). The room's reference picture changes twice, each time through a bridge. This is the worked example further down.
+
+https://github.com/user-attachments/assets/971a092f-26b7-40ec-8fc7-7471c91a90d3
+
+**Arriving on a shot's first frame, against arriving 17 frames in.** The same join both ways, at normal speed and then at quarter speed.
+
+https://github.com/user-attachments/assets/08e3837a-ae41-49ad-9039-d3365375d48c
+
+https://github.com/user-attachments/assets/aa347f72-8aef-4267-af25-41d05994cde3
+
+**A long run: 16 shots and 15 bridges of 5 seconds each, one prompt, 2 minutes 34 seconds.** This is here to show that the picture at the end looks like the picture at the start. It also shows the method's weak spot plainly: **her pace changes from piece to piece.** Each shot is rendered on its own and picks its own tempo, and the bridges have to get from one to the next. Watch the labels and you'll see the speed shift as the pieces change.
+
+[![Long run, preview size, with labels](https://img.youtube.com/vi/4NjcilVhwvI/hqdefault.jpg)](https://youtube.com/shorts/4NjcilVhwvI)
+[![The same run through the upscale pass, no labels](https://img.youtube.com/vi/zM0mxxwC2h8/hqdefault.jpg)](https://youtube.com/shorts/zM0mxxwC2h8)
+
+Left: preview size, with labels. Right: the same run through the upscale pass, no labels. (Both open on YouTube.)
+
+**The same kind of run with a motion reference** (5 pieces, 25 seconds). A short looping clip of a plain mannequin running is given to every piece as `<Video 1>`, so every piece is paced by the same stride. It took most of the pace change out, not all of it.
+
+https://github.com/user-attachments/assets/4fde8d3b-f764-4930-b164-ce77bb65b806
+
 ## Install
 
 1. Clone or download this folder into `ComfyUI/custom_nodes/`.
