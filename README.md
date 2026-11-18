@@ -103,6 +103,7 @@ The video is a list of pieces that alternate: shot, bridge, shot, bridge, shot.
 - A **shot** is a normal H3 render from your pictures and its words.
 - A **bridge** is a normal H3 render whose first 5 frames are the last 5 frames of the shot before it, and whose last 5 frames are 5 frames of the shot after it. Those frames are the shots' real latents, written in and masked, so they decode as the same frames and the joins are plain cuts.
 - All the shots render first. Then the bridges. Nothing is ever rendered from a bridge, so no frame is more than one step from a fresh render and nothing compounds, however long the video is.
+- Where a bridge's own frames meet the locked ones there is a small one-frame brightness step: 2.95 levels out of 255 at the arriving end in my test, and chanon's docs report about the same. The node eases each bridge's free frames onto the shots at both ends with a colour curve, which took it to 0.6.
 
 Lengths are H3's 17k+5 frames (22, 39, 56 ... up to 15 seconds). Shot N uses `seed + N - 1`, so the same prompt gives different shots.
 
@@ -223,9 +224,7 @@ The **plan** output lists every piece with its frames, its pictures and any warn
 ## Where it's weak
 
 - **Pace between pieces.** Fresh shots don't know each other's tempo. A walk or a run can change speed from one piece to the next. A looped motion reference video helped a lot; a chain (Roy's approach) doesn't have this problem in the first place.
-- **Shots are made blind.** Each shot is rendered before the bridges on either side exist, so they only agree with each other as far as the prompt and pictures make them.
 - **Things I haven't adopted from Roy's notes** and probably should: clip lengths that are multiples of 3 so held audio stays on H3's audio grid, and holding more frames at the end of a bridge than at its start. This node holds 5 and 5.
-- A small brightness step where a bridge's free frames meet its locked ones is eased out with a simple colour curve. chanon has measured this properly and handles it better.
 
 ---
 
