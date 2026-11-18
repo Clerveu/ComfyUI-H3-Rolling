@@ -162,26 +162,28 @@ def renumber_pictures(text, idx, n_pics, where):
     return re.sub(r"<Picture (\d+)>", sub, text)
 
 
-def layout(pieces):
-    """Start frame of every piece, and the total. A bridge starts 5 frames before its left shot ends and
-    ends 5 frames into its right shot."""
+def layout(pieces, hold=PIN, drop=0):
+    """Start frame of every piece, and the total. A bridge starts hold + drop frames before its left shot
+    ends (it holds `hold` frames and re-makes the shot's last `drop`) and ends `hold` frames into its right shot."""
     starts, pos = [], 0
     for i, p in enumerate(pieces):
         if i:
-            pos = starts[-1] + pieces[i - 1]["frames"] - PIN
+            pos = starts[-1] + pieces[i - 1]["frames"] - hold - (drop if i % 2 else 0)
         starts.append(pos)
     return starts, starts[-1] + pieces[-1]["frames"]
 
 
 def frame_label(n, pieces, starts):
     """(text, color) for the top-left label of global frame n. Shot frames win where pieces overlap."""
+    hold, drop = pieces[0].get("hold", PIN), pieces[0].get("drop", 0)
     for i in range(0, len(pieces), 2):
         s, ln = starts[i], pieces[i]["frames"]
-        if s <= n < s + ln:
+        last = i == len(pieces) - 1
+        if s <= n < s + ln - (0 if last else drop):  # its last `drop` frames are shown as the bridge's
             k, f = pieces[i].get("no", i // 2 + 1), n - s + 1
-            if i and f <= PIN:
+            if i and f <= hold:
                 return f"SHOT {k}  f {f}/{ln} = BRIDGE {k - 1} end pin", (255, 255, 0)
-            if i < len(pieces) - 1 and f > ln - PIN:
+            if not last and f > ln - drop - hold:
                 return f"SHOT {k}  f {f}/{ln} = BRIDGE {k} start pin", (255, 255, 0)
             return f"SHOT {k}  f {f}/{ln}", (255, 255, 255)
     for i in range(1, len(pieces), 2):
@@ -363,7 +365,18 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
     notes = list(extra_notes) + notes
     P = len(pieces)
     N = (P + 1) // 2
-    starts, F = layout(pieces)
+    hold, drop = int(lab.get("hold_frames", PIN)), int(lab.get("drop_tail", 0))
+    if pin_mode != "mask":
+        hold, drop = PIN, 0
+    if (hold - 5) % 17 or hold < 5 or drop % 17 or drop < 0:
+        raise ValueError(f"hold_frames {hold} / drop_tail {drop}: hold is 5, 22, 39 ... and drop is a multiple of 17")
+    for i, p in enumerate(pieces):
+        p["hold"], p["drop"] = hold, drop
+        need = hold + (hold + drop if i < P - 1 else 0) if i % 2 == 0 else 2 * hold + 17
+        if (hold, drop) != (PIN, 0) and p["frames"] < need and P > 1:
+            raise ValueError(f"piece {i + 1} ({p['kind']}) is {p['frames']} frames; with {hold} held frames and "
+                             f"{drop} dropped it needs at least {need}")
+    starts, F = layout(pieces, hold, drop)
     w, h = max(32, int(width) // 32 * 32), max(32, int(height) // 32 * 32)
     na = round(PIN * FRAME_RESCALE)
     _T[0] = 0.0
@@ -423,7 +436,7 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
             p["still"] = False
         P = len(pieces)
         N = (P + 1) // 2
-        starts, F = layout(pieces)
+        starts, F = layout(pieces, hold, drop)
     use_still = any(p["still"] for p in pieces)
 
     upscaler, up_model = None, None
@@ -444,7 +457,7 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
         s, ln = starts[i], p["frames"]
         row = f"  {name(i)}: frames {s}-{s + ln - 1} ({ts(s)}, {ln} frames)"
         if i % 2:
-            row += f", free {s + PIN}-{s + ln - PIN - 1}"
+            row += f", free {s + hold}-{s + ln - hold - 1}"
         if p["media"] not in (None, "all"):
             got = [f"picture_{j + 1}" for j in p["pics"]] + ["video"] * p["video"] + ["audio"] * p["audio"]
             row += f" | media: {', '.join(got) or 'none'}"
@@ -455,7 +468,8 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
     bridge_lens = sorted({p["frames"] for p in pieces[1::2]})
     plan = (f"{N} shot(s) of {'/'.join(map(str, shot_lens))} frames"
             + (f" + {N - 1} bridge(s) of {'/'.join(map(str, bridge_lens))} frames" if N > 1 else "")
-            + f" at {w}x{h} -> {F} frames ({F / FPS:.2f}s) | pins {PIN}+{PIN} ({pin_mode})"
+            + f" at {w}x{h} -> {F} frames ({F / FPS:.2f}s) | pins {hold}+{hold} ({pin_mode})"
+            + (f" | each bridge re-makes the last {drop} frames of the shot before it" if drop else "")
             + (f" | run-up: every shot after the first renders {runup} extra frames at its start that aren't shown"
                if runup else "")
             + (" | a frame of shot 1 is an extra picture for every later piece whose prompt says {still}"
@@ -519,6 +533,8 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
               still_from if p["still"] else None]
         if i % 2:
             lo += [pin_of(i), fps[i - 1][0], fps[i + 1][0]] + ([pieces[i + 1]["lead"]] if pieces[i + 1]["lead"] else [])
+            if (hold, drop) != (PIN, 0):
+                lo += ["hold", hold, drop]
         lo = _fp(*lo)
         hi = None
         if upscaler:
@@ -574,21 +590,24 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
         av, aa = a_lat.unbind()[:2]
         bv, ba = b_lat.unbind()[:2]
         mv, ma = torch.ones_like(v), torch.ones_like(a)
-        n = video_latent_t(PIN)
+        n = video_latent_t(hold)
+        d = drop // 17 * 5  # latents at the left shot's end that the bridge re-makes instead of holding
         t = v.shape[2]
-        v[:, :, :n] = av[:, :, -n:].to(v)
+        e = av.shape[2] - d
+        v[:, :, :n] = av[:, :, e - n:e].to(v)
         mv[:, :, :n] = 0
         o = lead // 17 * 5  # latents in the right shot's run-up
         v[:, :, t - n:] = bv[:, :, o:o + n].to(v)
         mv[:, :, t - n:] = 0
-        a0 = round((a_len - PIN) * FRAME_RESCALE)
-        src = aa[..., a0:a0 + na]
+        nh = round(hold * FRAME_RESCALE)
+        a0 = round((a_len - drop - hold) * FRAME_RESCALE)
+        src = aa[..., a0:a0 + nh]
         k0 = min(src.shape[-1], a.shape[-1])
         a[..., :k0] = src[..., :k0].to(a)
         ma[..., :k0] = 0
-        b0 = round(FRAME_RESCALE * (bl - PIN))
+        b0 = round(FRAME_RESCALE * (bl - hold))
         ao = round(lead * FRAME_RESCALE)
-        k1 = max(0, min(na, a.shape[-1] - b0, ba.shape[-1] - ao))
+        k1 = max(0, min(nh, a.shape[-1] - b0, ba.shape[-1] - ao))
         if k1:
             a[..., b0:b0 + k1] = ba[..., ao:ao + k1].to(a)
             ma[..., b0:b0 + k1] = 0
@@ -704,7 +723,7 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
             st["audio"] = torch.zeros((1, wf.shape[1], round(F / FPS * sr)), dtype=torch.float32)
         seg = imgs[:max(0, min(imgs.shape[0], r["len"], F - s))]
         if not first:
-            m = min(PIN, seg.shape[0])
+            m = min(hold, seg.shape[0])
             d = (st["sink"].get(s, s + m) - seg[:m].float()).abs().mean(dim=(1, 2, 3)) * 255
             print(f"{tag} join {nm} @ {s}: mean abs diff over the {m} shared frames "
                   f"{' '.join(f'{x:.2f}' for x in d.tolist())} (0-255)")
@@ -729,7 +748,7 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
         first frames), blended linearly across the free part. Takes out the brightness step where free frames
         meet pinned ones."""
         imgs = br_dec[0]
-        b0, f0, f1, k = starts[i], PIN, pieces[i]["frames"] - PIN, 3
+        b0, f0, f1, k = starts[i], hold, pieces[i]["frames"] - hold, 3
         qs = torch.linspace(0, 1, 65)
 
         def curve(src, ref):
