@@ -223,7 +223,6 @@ The **plan** output lists every piece with its frames, its pictures and any warn
 
 - **Pace between pieces.** Fresh shots don't know each other's tempo. A walk or a run can change speed from one piece to the next. A looped motion reference video helped a lot; a chain (Roy's approach) doesn't have this problem in the first place.
 - **Shots are made blind.** Each shot is rendered before the bridges on either side exist, so they only agree with each other as far as the prompt and pictures make them.
-- **Arrivals can still miss.** A bridge has to reach frames that already exist. chanon's docs describe this as seed-dependent and that matches what I saw. `take` on that bridge is the remedy.
 - **Things I haven't adopted from Roy's notes** and probably should: clip lengths that are multiples of 3 so held audio stays on H3's audio grid, and holding more frames at the end of a bridge than at its start. This node holds 5 and 5.
 - A small brightness step where a bridge's free frames meet its locked ones is eased out with a simple colour curve. chanon has measured this properly and handles it better.
 
