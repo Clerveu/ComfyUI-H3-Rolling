@@ -98,7 +98,7 @@ def parse_timeline(timeline, prompt, beat, shot_frames, bridge_frames):
                 raise ValueError(f"piece {i + 1}: the prompt has {{beat}} in it and this piece has no beat")
             text = text.replace("{beat}", b.strip())
         out.append({"kind": kind, "frames": frames, "text": text.strip(), "media": p.get("media", media),
-                    "seed": p.get("seed"), "pin": p.get("pin")})
+                    "seed": p.get("seed"), "pin": p.get("pin"), "final": bool(p.get("final"))})
     if len(out) % 2 == 0:
         raise ValueError(f"{len(out)} pieces: they go shot, bridge, shot ... and must end on a shot, so the count is odd")
     return out, notes
@@ -176,7 +176,7 @@ def frame_label(n, pieces, starts):
     for i in range(0, len(pieces), 2):
         s, ln = starts[i], pieces[i]["frames"]
         if s <= n < s + ln:
-            k, f = i // 2 + 1, n - s + 1
+            k, f = pieces[i].get("no", i // 2 + 1), n - s + 1
             if i and f <= PIN:
                 return f"SHOT {k}  f {f}/{ln} = BRIDGE {k - 1} end pin", (255, 255, 0)
             if i < len(pieces) - 1 and f > ln - PIN:
@@ -185,7 +185,7 @@ def frame_label(n, pieces, starts):
     for i in range(1, len(pieces), 2):
         s, ln = starts[i], pieces[i]["frames"]
         if s <= n < s + ln:
-            return f"BRIDGE {(i + 1) // 2}  f {n - s + 1}/{ln}  FREE", (255, 165, 0)
+            return f"BRIDGE {pieces[i].get('no', (i + 1) // 2)}  f {n - s + 1}/{ln}  FREE", (255, 165, 0)
     return "", (255, 255, 255)
 
 
@@ -352,7 +352,8 @@ def cache_put(fp, v, a, budget=8 * 2**30):
 def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frames, bridge_frames, width, height,
                  steps, sampler_name, scheduler, seed, ref_image_size, pin_mode="mask", soundtrack="generated",
                  upscale_pass=False, upscale_megapixels=1.5, upscale_steps=2, upscale_denoise=0.4,
-                 frame_labels=False, pictures=(), ref_video=None, ref_audio=None, sampler=None, sigmas=None):
+                 frame_labels=False, pictures=(), ref_video=None, ref_audio=None, sampler=None, sigmas=None,
+                 solo=None, extra_notes=()):
     import sys
 
     import comfy.model_management
@@ -374,6 +375,7 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
     lab = _lab()
     pin_mode = lab.get("pin_mode", pin_mode)
     pieces, notes = parse_timeline(timeline, prompt, beat, shot_frames, bridge_frames)
+    notes = list(extra_notes) + notes
     P = len(pieces)
     N = (P + 1) // 2
     starts, F = layout(pieces)
@@ -388,11 +390,14 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
     # many extra frames at its start, the bridge arrives on the frames right after them (the shot in full
     # motion, same as the frames a bridge leaves from), and the run-up is never shown.
     # A piece's "frames" stays the length that is shown; "render" is what H3 makes.
-    runup = int(lab.get("runup", 0))
+    runup = int(lab.get("runup", 17))
     if runup % 17:
         raise ValueError(f"runup {runup}: it has to be a multiple of 17 frames (H3's block size) so the pins line up")
     for i, p in enumerate(pieces):
         p["lead"] = runup if (i % 2 == 0 and i > 0) else 0
+        p["gi"] = i  # its place in the whole timeline: seeds and names go by this even in a solo run
+        p["no"] = i // 2 + 1 if i % 2 == 0 else (i + 1) // 2
+        p["name"] = f"shot {p['no']}" if i % 2 == 0 else f"bridge {p['no']}"
         p["render"] = p["frames"] + p["lead"]
         # The reference video is read as a source as long as the whole timeline, looping if it is shorter:
         # each piece gets the frames that fall where it sits (its run-up included). A looping motion
@@ -400,7 +405,7 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
         p["vstart"] = (starts[i] - p["lead"]) % ref_video.shape[0] if ref_video is not None else 0
 
     def name(i):
-        return f"shot {i // 2 + 1}" if i % 2 == 0 else f"bridge {(i + 1) // 2}"
+        return pieces[i]["name"]
 
     def pin_of(i):
         """How the bridge at (or just before) piece i holds its ends.
@@ -415,10 +420,27 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
     for i, p in enumerate(pieces):
         p["pics"], p["video"], p["audio"] = pick_media(p["media"], len(pics), ref_video is not None,
                                                        ref_audio is not None, name(i))
-        p["text"] = renumber_pictures(p["text"], p["pics"], len(pics), name(i))
+        if not p["final"]:  # the storyboard box has already numbered its pieces' pictures
+            p["text"] = renumber_pictures(p["text"], p["pics"], len(pics), name(i))
         p["still"] = i > 0 and "{still}" in p["text"]
         if len(p["pics"]) + p["still"] > 9:
             raise ValueError(f"{name(i)}: H3 takes 9 pictures and this piece has {len(p['pics'])} plus the still")
+
+    # Solo: only one piece of the timeline is rendered (a bridge brings its two shots). The piece keeps its
+    # place in the whole timeline (seed, run-up, slice of the reference video), so what it renders is exactly
+    # what the full run would, and the full run then finds it in the piece cache.
+    solo_line = ""
+    if solo is not None and 0 <= solo < P:
+        a, b = (solo, solo) if solo % 2 == 0 else (solo - 1, solo + 1)
+        solo_line = f"solo: only {name(solo)} of the {P} pieces" + (" (with its two shots)" if solo % 2 else "")
+        if any(p["still"] for p in pieces[a:b + 1]):
+            solo_line += "; {still} isn't available in a solo run and was left out"
+        pieces = pieces[a:b + 1]
+        for p in pieces:
+            p["still"] = False
+        P = len(pieces)
+        N = (P + 1) // 2
+        starts, F = layout(pieces)
     use_still = any(p["still"] for p in pieces)
 
     upscaler, up_model = None, None
@@ -443,6 +465,8 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
         if p["media"] not in (None, "all"):
             got = [f"picture_{j + 1}" for j in p["pics"]] + ["video"] * p["video"] + ["audio"] * p["audio"]
             row += f" | media: {', '.join(got) or 'none'}"
+        if p["seed"] is not None:
+            row += f" | seed {p['seed']}"
         rows.append(row)
     shot_lens = sorted({p["frames"] for p in pieces[0::2]})
     bridge_lens = sorted({p["frames"] for p in pieces[1::2]})
@@ -454,7 +478,7 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
             + (" | a frame of shot 1 is an extra picture for every later piece whose prompt says {still}"
                if use_still else "")
             + (f" | upscale to {upscale_megapixels} MP with {up_model}, {upscale_steps} steps @ {upscale_denoise}"
-               if upscaler else "") + "\n" + "\n".join(rows + ["  note: " + n for n in notes]))
+               if upscaler else "") + "\n" + "\n".join(([f"  {solo_line}"] if solo_line else []) + rows + ["  note: " + n for n in notes]))
     print(f"{tag} {plan}")
 
     model_sampling = model.get_model_object("model_sampling")
@@ -483,11 +507,11 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
             use_cache = False
 
     def seeds(i):
-        own = pieces[i]["seed"]
+        own, g = pieces[i]["seed"], pieces[i]["gi"]
         if i % 2 == 0:
-            s = seed + i // 2 if own is None else int(own)  # own seed: same prompt + same seed = the same clip
+            s = seed + g // 2 if own is None else int(own)  # own seed: same prompt + same seed = the same clip
         else:
-            s = seed + 50000 + (i - 1) // 2 if own is None else int(own)
+            s = seed + 50000 + (g - 1) // 2 if own is None else int(own)
         return s, s + 100000
 
     def resolved(p, with_the_still):

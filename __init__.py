@@ -370,35 +370,28 @@ class H3RollingAnchors:
             sampler=sampler, sigmas=sigmas)
 
 
-TIMELINE_PROMPT = """subject_definitions:
-<Subject 1> is the woman whose appearance comes from <Picture 1>.
-<Subject 2> is the room in <Picture 2>.
-{still} shows how the camera frames <Subject 2>.
+STORYBOARD_TIP = """Optional. Empty = the prompt above, for every piece ('shots' of them).
 
-summary:
-[reference generation] {beat}
+>  starts a shot,  ~  starts a bridge. Everything up to the next marker is that piece's text. It goes where {beat} is in the prompt, or on the end of the prompt if there is no {beat}, or is the whole prompt if the prompt box is empty.
 
-retention_analysis:
-<Subject 1> (throughout [Shot 1]): fully_preserved - her face, hair, build and clothing from <Picture 1>.
-<Subject 2> (throughout [Shot 1]): fully_preserved - the room, its furniture and its light from <Picture 2>.
-{still}: attribute_transfer - the camera's framing of the room, and how large <Subject 1> is in the frame.
+Settings are bare lowercase words right after the marker:
+  7s or 158f = length    image 3 = start handing picture_3 over    -image 2 = stop handing picture_2 over
+  take 2 = another roll of this piece    seed 5001 = this exact seed    solo = render only this piece
 
-detailed_description:
-Photorealistic live-action footage, filmed by a static camera.
+Above the first piece, optional:
+  image 1: <Subject 1> is the woman in <Picture>.
+    keep: her appearance and clothing from <Picture>
+  image 2, 3: <Subject 2> is the room in <Picture>.
+  start: image 1, image 2
+The node then writes the subject_definitions and retention_analysis lines for each piece from the images that piece has, with the picture numbers filled in.
 
-[Shot 1] A full-length view of <Subject 1> in <Subject 2>. {beat}
-
-overall_soundscape:
-Quiet room tone.
-
-non_diegetic_music:
-N/A"""
+<Picture N> typed by hand always means picture_N. JSON (a list of pieces) is still accepted here."""
 
 
 class H3RollingTimeline:
     """A long H3 video from pictures and prompts, no source video. The video is a list of pieces: shots rendered
     on their own, and bridges pinned between each pair of shots. Nothing is ever rendered from a bridge.
-    Leave the timeline box empty and it is built from the simple fields (one prompt, N shots)."""
+    The storyboard box says what the pieces are; leave it empty and every piece gets the prompt as typed."""
 
     CATEGORY = "MiniMax H3/rolling"
     RETURN_TYPES = ("IMAGE", "AUDIO", "STRING")
@@ -408,11 +401,11 @@ class H3RollingTimeline:
     @classmethod
     def INPUT_TYPES(cls):
         optional = {
-            "sampler": ("SAMPLER", {"tooltip": "Overrides sampler_name"}),
-            "sigmas": ("SIGMAS", {"tooltip": "Overrides steps + scheduler"}),
+            "sampler": ("SAMPLER", {"tooltip": "Not wired = er_sde"}),
+            "sigmas": ("SIGMAS", {"tooltip": "Not wired = 6 steps, beta"}),
         }
         for i in range(1, 10):
-            optional[f"picture_{i}"] = ("IMAGE",)
+            optional[f"picture_{i}"] = ("IMAGE", {"tooltip": f"image {i} in the storyboard, <Picture {i}> in the prompt"})
         optional["ref_video"] = ("IMAGE", {"tooltip": "Reference video frames at 24 fps (2-15s): <Video 1> in the prompt."})
         optional["ref_audio"] = ("AUDIO", {"tooltip": "Standalone reference audio: <Audio 1> in the prompt."})
         return {
@@ -421,58 +414,63 @@ class H3RollingTimeline:
                 "clip": ("CLIP",),
                 "vae": ("VAE", {"tooltip": "Video VAE"}),
                 "audio_vae": ("VAE", {"tooltip": "Audio VAE"}),
-                "prompt": ("STRING", {"multiline": True, "default": TIMELINE_PROMPT,
-                                      "tooltip": "The prompt every piece shares. {beat} is replaced by the piece's beat. {still} is the tag of a frame taken from shot 1 and given to later pieces as an extra picture; lines that mention {still} are left out of shot 1's own prompt. Leave {still} out and no frame is taken."}),
-                "beat": ("STRING", {"multiline": True, "default": "<Subject 1> dances in place.",
-                                    "tooltip": "What happens, for every piece that doesn't have a beat of its own in the timeline."}),
-                "shots": ("INT", {"default": 4, "min": 1, "max": 500,
-                                  "tooltip": "Simple mode: how many shots. There is one bridge between each pair. Ignored when the timeline box has something in it."}),
+                "prompt": ("STRING", {"multiline": True, "default": "",
+                                      "tooltip": "Sent to H3 as typed, for every piece, with the pictures that piece has. Optional: {beat} marks where each storyboard piece's text goes."}),
+                "storyboard": ("STRING", {"multiline": True, "default": "", "tooltip": STORYBOARD_TIP}),
+                "shots": ("INT", {"default": 1, "min": 1, "max": 500,
+                                  "tooltip": "How many shots when the storyboard has no pieces in it (one bridge between each pair). Ignored otherwise."}),
                 "shot_seconds": ("FLOAT", {"default": 5.0, "min": 0.9, "max": 15.0, "step": 0.1,
-                                           "tooltip": "Default length of a shot. H3 is trained on 5, 10 and 15 second clips; shots under a couple of seconds can't hold a tempo. Snapped to H3's 17k+5 frames."}),
+                                           "tooltip": "Length of a shot that doesn't give its own. Snapped to H3's 17k+5 frames."}),
                 "bridge_seconds": ("FLOAT", {"default": 5.0, "min": 0.9, "max": 15.0, "step": 0.25,
-                                             "tooltip": "Default length of a bridge, including the 5 frames it shares with the shot on each side."}),
-                "timeline": ("STRING", {"multiline": True, "default": "",
-                                        "tooltip": "Empty = shots x (shot + bridge) on the defaults above. Otherwise JSON: a list of pieces going shot, bridge, shot ... shot. Each is {\"kind\": \"shot\" or \"bridge\"} plus only what differs from the defaults: \"seconds\" or \"frames\", \"beat\", \"prompt\" (a whole prompt of its own), \"media\" (a list of picture_1 ... picture_9, video, audio), \"seed\". The plan output prints the timeline that was used, ready to paste here and edit."}),
+                                             "tooltip": "Length of a bridge that doesn't give its own, including the 5 frames it shares with the shot on each side."}),
                 "width": ("INT", {"default": 864, "min": 256, "max": 2048, "step": 32}),
                 "height": ("INT", {"default": 480, "min": 256, "max": 2048, "step": 32}),
-                "steps": ("INT", {"default": 6, "min": 1, "max": 100}),
-                "sampler_name": (comfy.samplers.KSampler.SAMPLERS, {"default": "er_sde"}),
-                "scheduler": (comfy.samplers.KSampler.SCHEDULERS, {"default": "beta"}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "control_after_generate": True,
-                                 "tooltip": "Shot N uses seed + N - 1; bridge N uses seed + 50000 + N - 1. A piece can set its own."}),
+                                 "tooltip": "Shot N uses seed + N - 1; bridge N uses seed + 50000 + N - 1. 'take' and 'seed' in the storyboard change one piece."}),
                 "ref_image_size": (["match", "max"], {"default": "max"}),
-                "pin_mode": (["mask", "keyframe"], {"default": "mask",
-                                                    "tooltip": "How a bridge holds the 5 frames it shares with each shot. mask: the shots' real latents are written into the bridge and masked off, so they decode as the shots' own frames and the joins are plain cuts. keyframe: passed as H3 keyframe guides; the bridge draws its own copy and the joins are 5-frame crossfades."}),
                 "soundtrack": (["generated", "silent"], {"default": "generated"}),
                 "upscale_pass": ("BOOLEAN", {"default": False,
-                                             "tooltip": "Per piece: latent-upscale with the Minimax H3 3D upscaler, then a short polish pass. Bridges are pinned to the upscaled shots."}),
+                                             "tooltip": "Per piece: latent-upscale with the Minimax H3 3D upscaler, then a short polish pass. Pieces already rendered at preview size are reused."}),
                 "upscale_megapixels": ("FLOAT", {"default": 1.5, "min": 0.2, "max": 4.0, "step": 0.1}),
                 "upscale_steps": ("INT", {"default": 2, "min": 1, "max": 30}),
                 "upscale_denoise": ("FLOAT", {"default": 0.4, "min": 0.05, "max": 1.0, "step": 0.05}),
                 "frame_labels": ("BOOLEAN", {"default": False,
-                                             "tooltip": "Burn in which piece and which frame of it every frame is (shot / shared pin / bridge), plus the frame number and time. For review."}),
+                                             "tooltip": "Burn in which piece and which frame of it every frame is, plus the frame number and time. For review."}),
             },
             "optional": optional,
         }
 
-    def run(self, model, clip, vae, audio_vae, prompt, beat, shots, shot_seconds, bridge_seconds, timeline, width,
-            height, steps, sampler_name, scheduler, seed, ref_image_size, pin_mode="mask", soundtrack="generated",
+    def run(self, model, clip, vae, audio_vae, prompt, storyboard="", shots=1, shot_seconds=5.0, bridge_seconds=5.0,
+            width=864, height=480, seed=0, ref_image_size="max", soundtrack="generated",
             upscale_pass=False, upscale_megapixels=1.5, upscale_steps=2, upscale_denoise=0.4, frame_labels=False,
-            sampler=None, sigmas=None, ref_video=None, ref_audio=None, **pictures):
-        import json
+            sampler=None, sigmas=None, ref_video=None, ref_audio=None,
+            # not on the node any more; still honoured from an API graph or lab.json
+            timeline="", beat="", steps=6, sampler_name="er_sde", scheduler="beta", pin_mode="mask", **pictures):
+        from . import storyboard as storyboard_mod
         importlib.reload(rolling_core)
         importlib.reload(rolling_timeline)
-        tl = timeline.strip() or rolling_timeline.simple_timeline(shots)
-        frames, audio, plan = rolling_timeline.run_timeline(
+        importlib.reload(storyboard_mod)
+        lab = rolling_core._lab()
+        steps, sampler_name, scheduler = (lab.get("steps", steps), lab.get("sampler_name", sampler_name),
+                                          lab.get("scheduler", scheduler))
+        box = (storyboard or "").strip() or (timeline or "").strip()
+        solo, notes = None, []
+        if box[:1] in ("[", "{"):  # a timeline as JSON, as before
+            tl = box
+        else:
+            loaded = [i for i in range(1, 10) if pictures.get(f"picture_{i}") is not None]
+            built = storyboard_mod.build(box, prompt, shots, seed, loaded, ref_video is not None,
+                                         ref_audio is not None, beat)
+            tl, solo, notes = {"pieces": built["pieces"]}, built["solo"], built["notes"]
+            for k, p in enumerate(built["pieces"]):
+                print(f"[H3 Rolling Timeline] piece {k + 1} ({p['kind']}) is sent:\n{p['prompt']}\n")
+        return rolling_timeline.run_timeline(
             model, clip, vae, audio_vae, tl, prompt, beat, round(shot_seconds * rolling_core.FPS),
             round(bridge_seconds * rolling_core.FPS), width, height, steps, sampler_name, scheduler, seed,
             ref_image_size, pin_mode=pin_mode, soundtrack=soundtrack, upscale_pass=upscale_pass,
             upscale_megapixels=upscale_megapixels, upscale_steps=upscale_steps, upscale_denoise=upscale_denoise,
             frame_labels=frame_labels, pictures=[pictures.get(f"picture_{i}") for i in range(1, 10)],
-            ref_video=ref_video, ref_audio=ref_audio, sampler=sampler, sigmas=sigmas)
-        if not timeline.strip():
-            plan += "\n  timeline used (paste into the timeline box to edit single pieces):\n  " + json.dumps(tl["pieces"])
-        return frames, audio, plan
+            ref_video=ref_video, ref_audio=ref_audio, sampler=sampler, sigmas=sigmas, solo=solo, extra_notes=notes)
 
 
 NODE_CLASS_MAPPINGS = {
