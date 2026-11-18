@@ -11,7 +11,7 @@ This is a personal tool, shared for reference. I built it to make my own videos,
 
 **The core idea here is not new, and I found that out late.** Rendering fresh clips and then filling the gap between two of them with a clip that is locked to both is:
 
-- **Bridge** in chanon's [comfyui-obvpm-timeline](https://github.com/chanon/comfyui-obvpm-timeline), which is a full editor built around it, and
+- **Bridge** in chanon's [comfyui-obvpm-timeline](https://github.com/chanon/comfyui-obvpm-timeline), which is a full timeline editor, and
 - the "odd shots fresh, even shots continue" example (`withers_has_big_nattys`) in roycho87's [Geiru Context Suite](https://github.com/roycho87/geiru_context_suite), using his Geiru Context and Geiru Anchoring nodes. Roy credits the odd/even order to obvpm.
 
 Holding real latents under a mask so the sampler keeps them comes from drozbay ([MaskVidExperiments](https://github.com/drozbay/MaskVidExperiments)) and seitanism ([Motion-Context-MultiRef](https://github.com/seitanism/ComfyUI-H3-Motion-Context-MultiRef)); I learned it from Roy's nodes. No code from any of those projects is in this pack, but most of the ideas are theirs. I worked on this in parallel without realising how much of it they had already covered, so treat this repo as one more set of notes on the same road, not a different road.
@@ -19,7 +19,7 @@ Holding real latents under a mask so the sampler keeps them comes from drozbay (
 **If you're choosing a tool:**
 
 - Want to build a video clip by clip, look at each take, re-roll, trim, loop, upscale the whole cut in one pass? Use chanon's timeline. It does far more than this.
-- Want long chains where motion carries forward naturally from clip to clip, or one long render in windows? Use Roy's suite. His Keystone work holds a chain together well, and a chain keeps pace between clips better than this does.
+- Want long chains where motion carries forward naturally from clip to clip, or one long render in windows? Use Roy's suite. His Keystone work holds a chain together well, and a chain carries each clip's motion into the next, which this layout does not.
 - Want to type a whole storyboard into one box, press Run once and walk away, with each piece only ever one step from a fresh render? That is the one thing this node is for.
 
 ## What might be worth a look
@@ -28,7 +28,7 @@ Small things I didn't find written down elsewhere. They may well be known.
 
 - **Changing the room through a bridge.** Shots render first, so a bridge is locked at its start to frames that show the room before a change and at its end to frames that show it after. Give the bridge the *old* reference picture and only give the new picture to the shot after it. In my test a character writes on a blank chalkboard and her writing arrives at the handwriting that is in the next shot's reference picture. See the worked example below.
 - **A short shot between two bridges.** One long action (writing two lines) split into two bridges with a 1.5 second shot between them, whose only job is the motion between the halves. It reads as a breath, not a pause.
-- **A number behind landing 17 frames in.** Roy recommends freeing the first 17 frames of the next shot (`drop_first 17` on Geiru Anchoring) so motion carries. I measured why on a running subject: averaged over 15 joins, the very first frame-to-frame step of a freshly rendered H3 clip moved as little as 0.08 of the normal amount, and there was often a second held frame at 5 to 6. A bridge arriving on those frames slows into them and then jumps. Arriving 17 frames later fixed it. This node always does that (it renders every shot after the first with 17 extra frames at the start, arrives after them, and never shows them).
+- **A number behind landing 17 frames in.** Roy's recommended Geiru Anchoring setting frees the first 17 frames of the next shot (`drop_first 17`), and his notes say of the drop settings that freeing the outer 17 frames "lets motion carry instead of freezing." I ran into the same thing from the other side on a running subject. Across the 15 joins of one run, the first frame-to-frame step of a freshly rendered shot was often a held frame, moving as little as 0.08 of the normal amount, sometimes with a second one at frames 5 to 6. A bridge arriving on those frames slows into them and then jumps. Arriving 17 frames later fixed it. This node always does that (it renders every shot after the first with 17 extra frames at the start, arrives after them, and never shows them).
 
 ## Clips
 
@@ -38,13 +38,13 @@ Most of these have a label burned into the corner: which piece each frame belong
 
 https://github.com/user-attachments/assets/971a092f-26b7-40ec-8fc7-7471c91a90d3
 
-**Arriving on a shot's first frame, against arriving 17 frames in.** The same join both ways, at normal speed and then at quarter speed.
+**Arriving on a shot's first frame, against arriving 17 frames in.** Two joins, each shown both ways, at normal speed and then at quarter speed.
 
 https://github.com/user-attachments/assets/08e3837a-ae41-49ad-9039-d3365375d48c
 
 https://github.com/user-attachments/assets/aa347f72-8aef-4267-af25-41d05994cde3
 
-**A long run: 16 shots and 15 bridges of 5 seconds each, one prompt, 2 minutes 34 seconds.** This is here to show that the picture at the end looks like the picture at the start. It also shows the method's weak spot plainly: **her pace changes from piece to piece.** Each shot is rendered on its own and picks its own tempo, and the bridges have to get from one to the next. Watch the labels and you'll see the speed shift as the pieces change.
+**A long run: 16 shots and 15 bridges of 5 seconds each, one prompt, 2 minutes 34 seconds.** This is here to show that the picture at the end looks like the picture at the start. It also shows the method's weak spot plainly: **her pace changes from piece to piece, and sometimes drifts inside one.** Each shot is rendered on its own and picks its own tempo, and the bridges have to get from one to the next. Watch the labels and you'll see the speed shift as the pieces change.
 
 [![Long run, preview size, with labels](https://img.youtube.com/vi/4NjcilVhwvI/hqdefault.jpg)](https://youtube.com/shorts/4NjcilVhwvI)
 [![The same run through the upscale pass, no labels](https://img.youtube.com/vi/zM0mxxwC2h8/hqdefault.jpg)](https://youtube.com/shorts/zM0mxxwC2h8)
@@ -88,7 +88,7 @@ Everything in this README was made on one setup. I have not tried it any other w
 | Reference pictures | `ref_image_size` = max |
 | Software, hardware | ComfyUI 0.42.5, RTX 5090 |
 
-**It was only ever run with the turbo LoRA.** Roy's notes say the choice of turbo changes how H3 treats held frames, so a different turbo, or none, may behave differently at the joins. If you run without a turbo, wire your own `sampler` and `sigmas`; 6 steps is far too few without one.
+**It was only ever run with the turbo LoRA.** Roy's README says the choice of turbo changes how H3 treats held frames, so a different turbo, or none, may behave differently at the joins. If you run without a turbo, wire your own `sampler` and `sigmas`; 6 steps is far too few without one.
 
 For scale: the 35 second chalkboard example (3 shots, 2 bridges) took about 7 minutes at 864x480, and about 12 more for the upscale pass.
 
@@ -101,7 +101,7 @@ For scale: the 35 second chalkboard example (3 shots, 2 bridges) took about 7 mi
 The video is a list of pieces that alternate: shot, bridge, shot, bridge, shot.
 
 - A **shot** is a normal H3 render from your pictures and its words.
-- A **bridge** is a normal H3 render whose first 5 frames are the last 5 frames of the shot before it, and whose last 5 frames are 5 frames of the shot after it. Those frames are the shots' real latents, written in and masked, so they decode as the same frames and the joins are plain cuts.
+- A **bridge** is a normal H3 render whose first 5 frames are the last 5 frames of the shot before it, and whose last 5 frames are 5 frames of the shot after it. Those frames are the shots' real latents, written in and masked, so they decode as very nearly the same frames (within a couple of brightness levels in my test) and the joins are plain cuts. Where the two overlap, the shot's own frames are the ones shown.
 - All the shots render first. Then the bridges. Nothing is ever rendered from a bridge, so no frame is more than one step from a fresh render and nothing compounds, however long the video is.
 - Inside a bridge, at the frame where its own generated frames meet the locked ones, there was a small one-frame brightness step: 2.95 levels out of 255 at the arriving end, measured on one join. The node eases each bridge's free frames onto the shots at both ends with a colour curve, which took that step to 0.6.
 
@@ -223,8 +223,8 @@ The **plan** output lists every piece with its frames, its pictures and any warn
 
 ## Where it's weak
 
-- **Pace between pieces.** Fresh shots don't know each other's tempo. A walk or a run can change speed from one piece to the next. A looped motion reference video helped a lot; a chain (Roy's approach) doesn't have this problem in the first place.
-- **Things I haven't adopted from Roy's notes** and probably should: clip lengths that are multiples of 3 so held audio stays on H3's audio grid, and holding more frames at the end of a bridge than at its start. This node holds 5 and 5.
+- **Pace between pieces.** Fresh shots don't know each other's tempo. A walk or a run can change speed from one piece to the next. A looped motion reference video helped a lot. A chain (Roy's approach) starts every clip from the previous clip's motion, so I'd expect it not to have this problem, but I haven't compared the two by eye.
+- **Two of Roy's rules that this node doesn't follow, untested here.** His README recommends clip lengths that are multiples of 3, because held audio otherwise builds up down a chain. Nothing is chained here, so it may not matter, but I haven't checked. His notes also say to hold more frames at the end of a clip than at its start. This node holds 5 and 5.
 
 ---
 
