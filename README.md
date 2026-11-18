@@ -46,6 +46,27 @@ The nodes show up under **MiniMax H3/rolling**. A starter workflow is in `workfl
 
 Nothing else is required. Roy's and chanon's packs are not dependencies.
 
+### What it was tested with
+
+Everything in this README was made on one setup. I have not tried it any other way, so treat anything outside this list as untested.
+
+| | |
+|---|---|
+| Model | `Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8` (a Ref2VA model) |
+| Speed LoRA | `minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16` at strength 1.0, on every piece |
+| Sampling | er_sde, beta schedule, 6 steps. These are the node's built-in values when `sampler` and `sigmas` aren't wired. |
+| Attention | Comfy Kitchen attention (Model Attention Backend node) |
+| Text encoder | `qwen3vl_32b_minimax_h3_nvfp4_awq` |
+| VAEs | `minimax_h3_video_vae_int8_convrot`, `minimax_h3_audio_vae_fp32` |
+| Size | 864x480 (or 480x864) for the first stage |
+| Upscale pass | `minimax_h3_latent_upscaler_3d_conv_v1_fp16` to 1.5 MP, then 2 steps at 0.4 denoise |
+| Reference pictures | `ref_image_size` = max |
+| Software, hardware | ComfyUI 0.42.5, RTX 5090 |
+
+**It was only ever run with the turbo LoRA.** Roy's notes say the choice of turbo changes how H3 treats held frames, so a different turbo, or none, may behave differently at the joins. If you run without a turbo, wire your own `sampler` and `sigmas`; 6 steps is far too few without one.
+
+For scale: the 35 second chalkboard example (3 shots, 2 bridges) took about 7 minutes at 864x480, and about 12 more for the upscale pass.
+
 ---
 
 # H3 Rolling Timeline
