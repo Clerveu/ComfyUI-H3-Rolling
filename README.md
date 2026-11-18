@@ -212,6 +212,7 @@ The **plan** output lists every piece with its frames, its pictures and any warn
 
 ## What I learned using it
 
+- **The big one: where a bridge lands in the next shot.** This was the main thing that broke. With a subject in continuous motion (a run), about a third of the joins jumped at the point where a bridge reached the next shot. It never happened where a bridge left a shot. My first fix was regenerating the bridge on new seeds until one landed well, which sort of worked but was a lottery. The real fix was pinning the bridge further into the next shot: 17 frames in, not on its first frame. After that the jumps were gone with no re-rolling, and the node now always does it. The clips above show the same join both ways, and the measurement behind it is under "What might be worth a look".
 - **Size each piece by what happens in it.** Two big chalk words took about 11 seconds. Asked to do it in less, the letters appeared faster than the hand moved.
 - **Put the action that changes the scene in a bridge**, and the small actions around it (turning, picking something up) in the shots on either side.
 - **A place picture carries the room, not the camera.** Without a framing sentence that every piece shares, four shots gave four camera positions.
