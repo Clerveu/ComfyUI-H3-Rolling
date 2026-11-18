@@ -19,7 +19,7 @@ Holding real latents under a mask so the sampler keeps them comes from drozbay (
 **If you're choosing a tool:**
 
 - Want to build a video clip by clip, look at each take, re-roll, trim, loop, upscale the whole cut in one pass? Use chanon's timeline. It does far more than this.
-- Want long chains where motion carries forward naturally from clip to clip, or one long render in windows? Use Roy's suite. His Keystone work holds a chain together well, and a chain carries each clip's motion into the next, which this layout does not.
+- Want long chains where motion carries forward naturally from clip to clip, or one long render in windows? Use Roy's suite. His Keystone work holds a chain together well, and a chain keeps pace between clips better than this does.
 - Want to type a whole storyboard into one box, press Run once and walk away, with each piece only ever one step from a fresh render? That is the one thing this node is for.
 
 ## What might be worth a look
@@ -223,7 +223,7 @@ The **plan** output lists every piece with its frames, its pictures and any warn
 
 ## Where it's weak
 
-- **Pace between pieces.** Fresh shots don't know each other's tempo. A walk or a run can change speed from one piece to the next. A looped motion reference video helped a lot. A chain (Roy's approach) starts every clip from the previous clip's motion, so I'd expect it not to have this problem, but I haven't compared the two by eye.
+- **Pace between pieces.** Fresh shots don't know each other's tempo. A walk or a run can change speed from one piece to the next. A looped motion reference video helped a lot; a chain (Roy's approach) doesn't have this problem in the first place.
 - **Two of Roy's rules that this node doesn't follow, untested here.** His README recommends clip lengths that are multiples of 3, because held audio otherwise builds up down a chain. Nothing is chained here, so it may not matter, but I haven't checked. His notes also say to hold more frames at the end of a clip than at its start. This node holds 5 and 5.
 
 ---
