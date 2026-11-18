@@ -6,7 +6,7 @@ import os
 import comfy.samplers
 import folder_paths
 
-from . import rolling_anchor, rolling_core, rolling_gen, rolling_timeline
+from . import rolling_core, rolling_timeline
 
 VIDEO_EXTS = (".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v")
 
@@ -181,195 +181,6 @@ class H3RollingRef2VA:
                      "dialogue": dialogue, "speakers": speakers, "pin_mode": pin_mode})
 
 
-GEN_PROMPT = """subject_definitions:
-<Subject 1> is the cat whose appearance comes from <Picture 1>.
-
-summary:
-[reference generation] <Subject 1> rides a skateboard down a quiet street in one continuous shot.
-
-retention_analysis:
-<Subject 1> (throughout [Shot 1]): fully_preserved - her face, coat, and proportions from <Picture 1>.
-
-detailed_description:
-Photorealistic live-action footage in daylight.
-
-[Shot 1] A tracking shot follows <Subject 1>, a real cat, standing on a skateboard as it rolls down a quiet street, her paws planted on the deck. The camera tracks alongside her at the same speed.
-
-overall_soundscape:
-Skateboard wheels on pavement and light wind.
-
-non_diegetic_music:
-N/A"""
-
-
-class H3RollingGenerate:
-    """A long H3 video from pictures and prompts, no source video: a chain of clips, each starting from the end of
-    the one before (roycho87's Geiru Context Suite does the hand-off and the drift protection), joined as it renders."""
-
-    CATEGORY = "MiniMax H3/rolling"
-    RETURN_TYPES = ("IMAGE", "AUDIO", "STRING")
-    RETURN_NAMES = ("frames", "audio", "plan")
-    FUNCTION = "run"
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "model": ("MODEL",),
-                "clip": ("CLIP",),
-                "vae": ("VAE", {"tooltip": "Video VAE"}),
-                "audio_vae": ("VAE", {"tooltip": "Audio VAE"}),
-                "prompts": ("STRING", {"multiline": True, "default": GEN_PROMPT,
-                                       "tooltip": "One prompt = every clip uses it (generic ongoing action). For progressive action or dialogue, write one prompt per clip, separated by a line of three dashes: ---  With fewer prompts than clips, the last one repeats. Tags: <Picture N>."}),
-                "width": ("INT", {"default": 864, "min": 256, "max": 2048, "step": 32}),
-                "height": ("INT", {"default": 480, "min": 256, "max": 2048, "step": 32}),
-                "clip_seconds": ("FLOAT", {"default": 8.0, "min": 2.0, "max": 15.0, "step": 0.25,
-                                           "tooltip": "Length of each clip. H3 is trained on 5-15s."}),
-                "clips": ("INT", {"default": 3, "min": 1, "max": 200,
-                                  "tooltip": "How many clips to chain. Total length = clips x (clip - overlap) + overlap."}),
-                "overlap_frames": (["39", "22", "56"], {"default": "39",
-                                                        "tooltip": "Frames each clip shares with the one before (Geiru Context's head_frames)."}),
-                "drop_last": (["17", "0", "34"], {"default": "17",
-                                                  "tooltip": "Of the overlap, how many frames at its end are made fresh instead of held (they still fit the held sound). 39 with 17 = 22 held, 17 free."}),
-                "steps": ("INT", {"default": 6, "min": 1, "max": 100}),
-                "sampler_name": (comfy.samplers.KSampler.SAMPLERS, {"default": "er_sde"}),
-                "scheduler": (comfy.samplers.KSampler.SCHEDULERS, {"default": "beta"}),
-                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "control_after_generate": True,
-                                 "tooltip": "Clip N uses seed + N."}),
-                "ref_image_size": (["match", "max"], {"default": "max"}),
-                "hold_audio": ("BOOLEAN", {"default": True, "tooltip": "Hold the previous clip's sound across the overlap."}),
-                "degradation_protection": ("BOOLEAN", {"default": True,
-                                                       "tooltip": "Geiru's switch: off = plain chain (keystone, late lock and context noise all pass through). Turn it off around hard cuts and scene changes."}),
-                "keystone": (rolling_gen.KEYSTONE_PLACEMENTS, {"default": rolling_gen.KEYSTONE_PLACEMENTS[0],
-                                                              "tooltip": "Geiru Keystone: clip 1's first frame locked into the start of every later clip (and put back after), and/or a frame from clip 1's end tacked onto the back."}),
-                "late_lock_step": ("INT", {"default": 4, "min": 0, "max": 100,
-                                           "tooltip": "Geiru Late Lock: steps before the keystone/capstone come in, so the clip picks its own pose first. He recommends the last quarter of the steps."}),
-                "late_lock_slots": (rolling_gen.LATE_LOCK_SLOTS, {"default": rolling_gen.LATE_LOCK_SLOTS[0]}),
-                "context_noise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05,
-                                            "tooltip": "Geiru Context Noise: how much of the current noise the held frames get, fading to none at the join. 0 = off."}),
-                "soundtrack": (["generated", "silent"], {"default": "generated"}),
-                "keystone_attention": ("FLOAT", {"default": 20.0, "min": 0.0, "max": 1000.0, "step": 0.5,
-                                                 "tooltip": "Geiru Keystone Attention (suite 1.1+): how hard each clip looks at the keystone compared with the carried frames, in the 13 blocks he found carry brightness. 20 is his default. 1 or 0 = off."}),
-            },
-            "optional": {
-                "sampler": ("SAMPLER", {"tooltip": "Overrides sampler_name"}),
-                "sigmas": ("SIGMAS", {"tooltip": "Overrides steps + scheduler"}),
-                "picture_1": ("IMAGE",),
-                "picture_2": ("IMAGE",),
-                "picture_3": ("IMAGE",),
-                "picture_4": ("IMAGE",),
-            },
-        }
-
-    def run(self, model, clip, vae, audio_vae, prompts, width, height, clip_seconds, clips, overlap_frames, drop_last,
-            steps, sampler_name, scheduler, seed, ref_image_size, hold_audio=True, degradation_protection=True,
-            keystone=rolling_gen.KEYSTONE_PLACEMENTS[0], late_lock_step=4, late_lock_slots=rolling_gen.LATE_LOCK_SLOTS[0],
-            context_noise=1.0, soundtrack="generated", keystone_attention=20.0, sampler=None, sigmas=None,
-            picture_1=None, picture_2=None, picture_3=None, picture_4=None):
-        importlib.reload(rolling_core)
-        importlib.reload(rolling_gen)
-        return rolling_gen.run_generate(
-            model, clip, vae, audio_vae, prompts, width, height, clip_seconds, clips, int(overlap_frames),
-            int(drop_last), steps, sampler_name, scheduler, seed, ref_image_size, hold_audio=hold_audio,
-            protection=degradation_protection, keystone=keystone, late_lock_step=late_lock_step,
-            late_lock_slots=late_lock_slots, context_noise=context_noise, soundtrack=soundtrack,
-            pictures=(picture_1, picture_2, picture_3, picture_4), sampler=sampler, sigmas=sigmas,
-            keystone_attention=keystone_attention)
-
-
-ANCHOR_PROMPT = """subject_definitions:
-<Subject 1> is the woman whose appearance comes from <Picture 1>.
-<Subject 2> is the room shown in {still}.
-
-summary:
-[reference generation] {beat}
-
-retention_analysis:
-<Subject 1> (throughout [Shot 1]): fully_preserved - her face, hair, build and clothing from <Picture 1>.
-<Subject 2> (throughout [Shot 1]): fully_preserved - the room, its furniture and its light from {still}.
-
-detailed_description:
-Photorealistic live-action footage in a living room in daylight, filmed by a static camera.
-
-[Shot 1] {beat}
-
-overall_soundscape:
-Quiet room tone.
-
-non_diegetic_music:
-N/A"""
-
-ANCHOR_BEATS = """<Subject 1> stands at the window on the left side of the room.
-<Subject 1> turns from the window, walks across the room to the couch on the right side of the room, and sits down on it.
-<Subject 1> sits on the couch on the right side of the room."""
-
-
-class H3RollingAnchors:
-    """A long H3 video from pictures and a storyboard, no source video: short anchor clips rendered on their own,
-    then a long bridge between each pair, pinned to both. Nothing is ever rendered from a bridge."""
-
-    CATEGORY = "MiniMax H3/rolling"
-    RETURN_TYPES = ("IMAGE", "AUDIO", "STRING")
-    RETURN_NAMES = ("frames", "audio", "plan")
-    FUNCTION = "run"
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "model": ("MODEL",),
-                "clip": ("CLIP",),
-                "vae": ("VAE", {"tooltip": "Video VAE"}),
-                "audio_vae": ("VAE", {"tooltip": "Audio VAE"}),
-                "prompt": ("STRING", {"multiline": True, "default": ANCHOR_PROMPT,
-                                      "tooltip": "The prompt every piece shares. {beat} is replaced by that piece's line from the beats box. {still} is the tag of a frame taken from anchor 1 and given to every later piece as an extra picture; lines that mention {still} are left out of anchor 1's own prompt. Leave {still} out entirely and no frame is taken. Or skip the beats box and write whole prompts here, separated by lines of ---, in the order anchor, bridge, anchor ... anchor."}),
-                "beats": ("STRING", {"multiline": True, "default": ANCHOR_BEATS,
-                                     "tooltip": "One line per piece, alternating: where she is (anchor), how she gets to the next place (bridge), where she is then (anchor) ... ending on an anchor. 3 lines = 2 anchors + 1 bridge, 5 lines = 3 anchors + 2 bridges."}),
-                "width": ("INT", {"default": 864, "min": 256, "max": 2048, "step": 32}),
-                "height": ("INT", {"default": 480, "min": 256, "max": 2048, "step": 32}),
-                "anchor_frames": (["22", "39", "56"], {"default": "22",
-                                                       "tooltip": "Length of each anchor clip. Its first and last 5 frames are shared with the bridges on either side."}),
-                "clip_seconds": ("FLOAT", {"default": 5.0, "min": 1.0, "max": 15.0, "step": 0.25,
-                                           "tooltip": "Length of each bridge: the time she has to get from one anchor to the next. H3 is trained on 5-15s."}),
-                "steps": ("INT", {"default": 6, "min": 1, "max": 100}),
-                "sampler_name": (comfy.samplers.KSampler.SAMPLERS, {"default": "er_sde"}),
-                "scheduler": (comfy.samplers.KSampler.SCHEDULERS, {"default": "beta"}),
-                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "control_after_generate": True,
-                                 "tooltip": "Anchor N uses seed + N; bridge N uses seed + 50000 + N."}),
-                "ref_image_size": (["match", "max"], {"default": "max"}),
-                "pin_mode": (["mask", "keyframe"], {"default": "mask",
-                                                    "tooltip": "How a bridge holds the 5 frames it shares with each anchor. mask: the anchors' real latents are written into the bridge and masked off, so they decode as the anchors' own frames and the joins are plain cuts. keyframe: passed as H3 keyframe guides; the bridge draws its own copy and the joins are 5-frame crossfades."}),
-                "soundtrack": (["generated", "silent"], {"default": "generated"}),
-                "upscale_pass": ("BOOLEAN", {"default": False,
-                                             "tooltip": "Per piece: latent-upscale with the Minimax H3 3D upscaler, then a short polish pass (Seed Hunter's stage 2). Bridges are pinned to the upscaled anchors."}),
-                "upscale_megapixels": ("FLOAT", {"default": 1.5, "min": 0.2, "max": 4.0, "step": 0.1}),
-                "upscale_steps": ("INT", {"default": 2, "min": 1, "max": 30}),
-                "upscale_denoise": ("FLOAT", {"default": 0.4, "min": 0.05, "max": 1.0, "step": 0.05}),
-            },
-            "optional": {
-                "sampler": ("SAMPLER", {"tooltip": "Overrides sampler_name"}),
-                "sigmas": ("SIGMAS", {"tooltip": "Overrides steps + scheduler"}),
-                "picture_1": ("IMAGE",),
-                "picture_2": ("IMAGE",),
-                "picture_3": ("IMAGE",),
-                "picture_4": ("IMAGE",),
-            },
-        }
-
-    def run(self, model, clip, vae, audio_vae, prompt, beats, width, height, anchor_frames, clip_seconds, steps,
-            sampler_name, scheduler, seed, ref_image_size, pin_mode="mask", soundtrack="generated",
-            upscale_pass=False, upscale_megapixels=1.5, upscale_steps=2, upscale_denoise=0.4,
-            sampler=None, sigmas=None, picture_1=None, picture_2=None, picture_3=None, picture_4=None):
-        importlib.reload(rolling_core)
-        importlib.reload(rolling_anchor)
-        return rolling_anchor.run_anchors(
-            model, clip, vae, audio_vae, prompt, beats, width, height, int(anchor_frames), clip_seconds, steps,
-            sampler_name, scheduler, seed, ref_image_size, pin_mode=pin_mode, soundtrack=soundtrack,
-            upscale_pass=upscale_pass, upscale_megapixels=upscale_megapixels, upscale_steps=upscale_steps,
-            upscale_denoise=upscale_denoise, pictures=(picture_1, picture_2, picture_3, picture_4),
-            sampler=sampler, sigmas=sigmas)
-
-
 STORYBOARD_TIP = """Optional. Empty = the prompt above, for every piece ('shots' of them).
 
 >  starts a shot,  ~  starts a bridge. Everything up to the next marker is that piece's text. It goes where {beat} is in the prompt, or on the end of the prompt if there is no {beat}, or is the whole prompt if the prompt box is empty.
@@ -476,15 +287,11 @@ class H3RollingTimeline:
 NODE_CLASS_MAPPINGS = {
     "H3RollingSource": H3RollingSource,
     "H3RollingRef2VA": H3RollingRef2VA,
-    "H3RollingGenerate": H3RollingGenerate,
-    "H3RollingAnchors": H3RollingAnchors,
     "H3RollingTimeline": H3RollingTimeline,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "H3RollingSource": "H3 Rolling Source (scrub)",
     "H3RollingRef2VA": "H3 Rolling Ref2VA",
-    "H3RollingGenerate": "H3 Rolling Generate (Geiru chain)",
-    "H3RollingAnchors": "H3 Rolling Anchors (beats + bridges)",
     "H3RollingTimeline": "H3 Rolling Timeline (shots + bridges)",
 }
 WEB_DIRECTORY = "./web"

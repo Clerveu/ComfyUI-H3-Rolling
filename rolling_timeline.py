@@ -54,7 +54,7 @@ def parse_timeline(timeline, prompt, beat, shot_frames, bridge_frames):
      "pieces": [{"kind": "shot"}, {"kind": "bridge", "seconds": 4, "beat": "she walks to the couch"},
                 {"kind": "shot", "prompt": "a whole prompt", "media": ["picture_1", "video"]}]}
 
-    Per piece, all optional: pin (a bridge only: mask, mask_endguide or keyframe), frames or seconds, beat (goes where {beat} is in the shared prompt) or prompt
+    Per piece, all optional: pin (a bridge only: mask or keyframe), frames or seconds, beat (goes where {beat} is in the shared prompt) or prompt
     (a whole prompt of its own, may also use {beat}), media ("all" or a list of picture_N / video / audio),
     seed. The arguments are the run's defaults; a "defaults" block in the timeline overrides them.
     """
@@ -97,6 +97,8 @@ def parse_timeline(timeline, prompt, beat, shot_frames, bridge_frames):
             if not (b or "").strip():
                 raise ValueError(f"piece {i + 1}: the prompt has {{beat}} in it and this piece has no beat")
             text = text.replace("{beat}", b.strip())
+        if p.get("pin") not in (None, "mask", "keyframe"):
+            raise ValueError(f"piece {i + 1}: pin must be \"mask\" or \"keyframe\", got {p.get('pin')!r}")
         out.append({"kind": kind, "frames": frames, "text": text.strip(), "media": p.get("media", media),
                     "seed": p.get("seed"), "pin": p.get("pin"), "final": bool(p.get("final"))})
     if len(out) % 2 == 0:
@@ -317,23 +319,6 @@ def cache_get(fp):
     return d["v"], d["a"]
 
 
-def note_get(fp):
-    """A small JSON note kept beside a cached piece (its landing score)."""
-    if fp is None:
-        return None
-    try:
-        with open(os.path.join(_cache_dir(), fp + ".note.json"), encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return None
-
-
-def note_put(fp, data):
-    if fp is not None:
-        with open(os.path.join(_cache_dir(), fp + ".note.json"), "w", encoding="utf-8") as f:
-            json.dump(data, f)
-
-
 def cache_put(fp, v, a, budget=8 * 2**30):
     d = _cache_dir()
     tmp = os.path.join(d, fp + ".tmp")
@@ -410,8 +395,6 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
     def pin_of(i):
         """How the bridge at (or just before) piece i holds its ends.
         mask: both ends are the shots' real latents, written in and locked (exact frames, plain cuts).
-        mask_endguide: the same, and the end is also given to H3 as a guide clip (its own 'be here at this
-          frame' input), so the model is told where it has to arrive.
         keyframe: both ends as guide clips only; the bridge draws its own copy and the joins are crossfades."""
         j = i if i % 2 else i - 1
         return (pieces[j]["pin"] if j > 0 and pieces[j]["pin"] else pin_mode)
@@ -551,25 +534,6 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
 
     used = {"rendered": [], "upscaled": [], "cached": []}
 
-    # Landing check. A bridge has to arrive on frames that already exist, and with periodic motion (a run)
-    # it can arrive out of step: the picture jumps where its free frames meet the pinned ones. With
-    # landing_tries > 1 each bridge is scored as soon as its first stage is done, and one that lands hard is
-    # rendered again on another seed (first stage only, the shots are untouched); the best landing is kept.
-    land_tries = max(1, int(lab.get("landing_tries", 1)))
-    land_limit = float(lab.get("landing_limit", 1.35))
-    landings = []
-
-    def landing(lo, bl):
-        """(worst, start, end): the change across each seam inside the bridge over the normal frame-to-frame
-        change in its free part. About 1 = the motion carries straight through. Measured on a small decode."""
-        imgs = nodes.VAEDecode().decode(vae, {"samples": lo})[0][:, ::4, ::4].float().cpu()
-        d = (imgs[1:] - imgs[:-1]).abs().mean(dim=(1, 2, 3))  # d[t - 1] = the change going into frame t
-        norm = max(float(d[PIN + 1:bl - PIN - 2].median()), 1e-6)
-        start, end = float(d[PIN - 1]) / norm, float(d[bl - PIN - 1]) / norm
-        # a first free frame that repeats the pin is a stutter: count it as a miss too
-        held_frame = land_limit * 0.35 / max(start, 1e-3) if start < 0.35 else 0.0
-        return [max(end, start, held_frame), start, end]
-
     def encode(p, still):
         images = [pics[j] for j in p["pics"]]
         still_tag = None
@@ -602,7 +566,7 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
         res = getattr(res, "args", None) or res.result
         return NT((res[0]["samples"], audio_lat))
 
-    def held(samples, a_lat, a_len, b_lat, bl, lead=0, ends="both"):
+    def held(samples, a_lat, a_len, b_lat, bl, lead=0):
         """mask pins: the left shot's last 5 frames and the right shot's first 5 written straight into the
         bridge's own starting latent and masked 0, so the sampler keeps them and they decode as the shots'
         own frames (roycho87's Geiru Context / Anchoring method, here into a piece nothing is rendered from)."""
@@ -612,23 +576,20 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
         mv, ma = torch.ones_like(v), torch.ones_like(a)
         n = video_latent_t(PIN)
         t = v.shape[2]
-        if ends != "end":
-            v[:, :, :n] = av[:, :, -n:].to(v)
-            mv[:, :, :n] = 0
+        v[:, :, :n] = av[:, :, -n:].to(v)
+        mv[:, :, :n] = 0
         o = lead // 17 * 5  # latents in the right shot's run-up
-        if ends != "start":
-            v[:, :, t - n:] = bv[:, :, o:o + n].to(v)
-            mv[:, :, t - n:] = 0
+        v[:, :, t - n:] = bv[:, :, o:o + n].to(v)
+        mv[:, :, t - n:] = 0
         a0 = round((a_len - PIN) * FRAME_RESCALE)
         src = aa[..., a0:a0 + na]
         k0 = min(src.shape[-1], a.shape[-1])
-        if ends != "end":
-            a[..., :k0] = src[..., :k0].to(a)
-            ma[..., :k0] = 0
+        a[..., :k0] = src[..., :k0].to(a)
+        ma[..., :k0] = 0
         b0 = round(FRAME_RESCALE * (bl - PIN))
         ao = round(lead * FRAME_RESCALE)
         k1 = max(0, min(na, a.shape[-1] - b0, ba.shape[-1] - ao))
-        if k1 and ends != "start":
+        if k1:
             a[..., b0:b0 + k1] = ba[..., ao:ao + k1].to(a)
             ma[..., b0:b0 + k1] = 0
         return NT((v, a)), NT((mv, ma))
@@ -659,19 +620,6 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
             v, a = samples.unbind()[:2]
             cache_put(fp, v, a)
 
-    def end_guide(cond, b_lat, bl, bridge_audio_t, lead=0):
-        """Only the arrival as an H3 guide clip: the right shot's first 5 frames anchored at the bridge's last 5."""
-        bv, ba = b_lat.unbind()[:2]
-        n = video_latent_t(PIN)
-        kfs = list(cond[0][1].get("minimax_keyframes", []))
-        o, ao = lead // 17 * 5, round(lead * FRAME_RESCALE)
-        end = {"resolved_frame_index": bl - PIN, "latent": bv[:, :, o:o + n].clone()}
-        room = math.floor(bridge_audio_t - FRAME_RESCALE * (bl - PIN))
-        if room > 0:
-            end["audio_latent"] = ba[..., ao:ao + min(na, room)].clone()
-        kfs.append(end)
-        return node_helpers.conditioning_set_values(cond, {"minimax_keyframes": kfs})
-
     def render_shot(i, enc):
         """enc is only needed (and only made) when something has to be rendered."""
         f_lo, f_hi = fps[i]
@@ -700,65 +648,31 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
         f_lo, f_hi = fps[i]
         s_lo, s_hi = seeds(i)
         bl = pieces[i]["frames"]
-        pm = pin_of(i)
-        # diagnostic modes: mask_start / mask_end hold one end only (the other end is left free, so that join
-        # is not a join; for measuring what each pin does to the motion)
-        ends = {"mask_start": "start", "mask_end": "end"}.get(pm, "both")
+        masked = pin_of(i) == "mask"
         fresh = fresh_lo = False
-
-        def first_stage(sd):
+        lo = load(f_lo)
+        if lo is None:
             cond, latent = enc()
-            at = latent["samples"].unbind()[1].shape[-1]
-            if pm.startswith("mask"):
-                start, mask = held(latent["samples"], a["lo"], a["rlen"], b["lo"], bl, b["lead"], ends)
-                if pm == "mask_endguide":
-                    cond = end_guide(cond, b["lo"], bl, at, b["lead"])
-                return sample(cond, start, sigmas, sd, mask)
-            return sample(pins(cond, a["lo"], a["rlen"], b["lo"], bl, at, b["lead"]), latent["samples"], sigmas, sd)
-
-        cands = []
-        for k in range(land_tries):
-            fk = f_lo if k == 0 or f_lo is None else _fp(f_lo, "landing", k)
-            cand = load(fk)
-            if cand is None:
-                cand = first_stage(s_lo + 7919 * k)
-                keep(fk, cand)
-                fresh = fresh_lo = True
-                _mark(f"{name(i)} sample" + (f" (landing try {k + 1})" if k else ""))
-            if land_tries == 1:
-                cands.append(([0.0, 0.0, 0.0], k, cand))
-                break
-            score = note_get(fk)
-            if score is None:
-                score = landing(cand, bl)
-                note_put(fk, score)
-            cands.append((score, k, cand))
-            if score[0] <= land_limit:
-                break
-        score, k, lo = min(cands, key=lambda c: c[0][0])
-        if land_tries > 1:
-            first = cands[0][0]
-            landings.append((name(i), first, score, k, len(cands)))
-            print(f"{tag} {name(i)} landing: leaves its start pin at {first[1]:.2f}x normal, reaches its end pin at "
-                  f"{first[2]:.2f}x" + (f" -> kept try {k + 1} of {len(cands)}: {score[1]:.2f}x / {score[2]:.2f}x"
-                                        if len(cands) > 1 else ""))
-        if k:  # the upscale of a re-rolled bridge is its own cached piece
-            f_hi = _fp(f_hi, "landing", k) if f_hi is not None else None
-            s_hi += 7919 * k
-        del cands
+            if masked:
+                start, mask = held(latent["samples"], a["lo"], a["rlen"], b["lo"], bl, b["lead"])
+                lo = sample(cond, start, sigmas, s_lo, mask)
+            else:
+                at = latent["samples"].unbind()[1].shape[-1]
+                lo = sample(pins(cond, a["lo"], a["rlen"], b["lo"], bl, at, b["lead"]), latent["samples"], sigmas, s_lo)
+            keep(f_lo, lo)
+            fresh = fresh_lo = True
+            _mark(f"{name(i)} sample")
         hi = None
         if upscaler:
             hi = load(f_hi)
             if hi is None:
                 cond, latent = enc()
-                at = latent["samples"].unbind()[1].shape[-1]
                 big = upscale(lo)
-                if pm.startswith("mask"):
-                    big, mask = held(big, a["hi"], a["rlen"], b["hi"], bl, b["lead"], ends)
-                    if pm == "mask_endguide":
-                        cond = end_guide(cond, b["hi"], bl, at, b["lead"])
+                if masked:
+                    big, mask = held(big, a["hi"], a["rlen"], b["hi"], bl, b["lead"])
                     hi = sample(cond, big, up_sigmas, s_hi, mask)
                 else:
+                    at = latent["samples"].unbind()[1].shape[-1]
                     hi = sample(pins(cond, a["hi"], a["rlen"], b["hi"], bl, at, b["lead"]), big, up_sigmas, s_hi)
                 keep(f_hi, hi)
                 fresh = True
@@ -907,7 +821,7 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
     enc, seen = {}, {}
     for i in range(1, P):
         p = pieces[i]
-        if use_cache and cached(i) and not (land_tries > 1 and i % 2):
+        if use_cache and cached(i):
             continue
         key = (p["text"], p["render"], tuple(p["pics"]), p["video"], p["audio"])
         if key not in seen:  # pieces with the same words, length and media share one encode
@@ -949,13 +863,6 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
                 + (f" ({', '.join(used['rendered'])})" if used["rendered"] else "")
                 + (f"; upscaled from a cached first stage: {', '.join(used['upscaled'])}" if used["upscaled"] else "")
                 + (f"; from the piece cache: {', '.join(used['cached'])}" if used["cached"] else ""))
-        plan += "\n  " + line
-        print(f"{tag} {line}")
-    if landings:
-        redone = [x for x in landings if x[4] > 1]
-        line = (f"landing check (limit {land_limit}x, up to {land_tries} tries): {len(landings) - len(redone)} of "
-                f"{len(landings)} bridges landed first time"
-                + "".join(f"\n    {n}: {f[0]:.2f}x -> {sc[0]:.2f}x (try {k + 1} of {t})" for n, f, sc, k, t in redone))
         plan += "\n  " + line
         print(f"{tag} {line}")
     return frames_out, final_audio, plan
