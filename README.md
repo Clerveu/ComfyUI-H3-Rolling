@@ -110,6 +110,8 @@ Lengths are H3's 17k+5 frames (22, 39, 56 ... up to 15 seconds). Shot N uses `se
 
 Put a prompt in **prompt**, plug in your pictures, set **shots**. Every piece gets the prompt exactly as typed, with every picture. `<Picture 1>` is `picture_1`, and so on. That's all.
 
+There are nine picture inputs (H3's limit) and they take anything that outputs an image: plain Load Image nodes, as in the starter workflow, or any media loader. Empty inputs are ignored, and the input's number is the picture's number even if lower ones are empty.
+
 ## The storyboard box
 
 Optional. Everything in it is optional too: leave a part out and nothing is added for it.
