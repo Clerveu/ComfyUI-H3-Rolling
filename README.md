@@ -44,7 +44,7 @@ https://github.com/user-attachments/assets/08e3837a-ae41-49ad-9039-d3365375d48c
 
 https://github.com/user-attachments/assets/aa347f72-8aef-4267-af25-41d05994cde3
 
-**A long run: 16 shots and 15 bridges of 5 seconds each, one prompt, 2 minutes 34 seconds.** This is here to show that the picture at the end looks like the picture at the start. It also shows the method's weak spot plainly: **her pace changes from piece to piece, and sometimes drifts inside one.** Each shot is rendered on its own and picks its own tempo, and the bridges have to get from one to the next. Watch the labels and you'll see the speed shift as the pieces change.
+**A long run: 16 shots and 15 bridges of 5 seconds each, one prompt, 2 minutes 34 seconds.** This is here to show that the picture at the end looks like the picture at the start. It also shows the method's weak spot plainly: **her pace changes from piece to piece, and sometimes drifts inside one.** Each shot is rendered on its own and picks its own tempo, and the bridges have to get from one to the next. Watch the labels and you'll see the speed shift as the pieces change. This run used the default 5-frame holds. Holding 22 frames is what fixed it; see "How much a bridge holds".
 
 [![Long run, preview size, with labels](https://img.youtube.com/vi/4NjcilVhwvI/hqdefault.jpg)](https://youtube.com/shorts/4NjcilVhwvI)
 [![The same run through the upscale pass, no labels](https://img.youtube.com/vi/zM0mxxwC2h8/hqdefault.jpg)](https://youtube.com/shorts/zM0mxxwC2h8)
@@ -101,7 +101,7 @@ For scale: the 35 second chalkboard example (3 shots, 2 bridges) took about 7 mi
 The video is a list of pieces that alternate: shot, bridge, shot, bridge, shot.
 
 - A **shot** is a normal H3 render from your pictures and its words.
-- A **bridge** is a normal H3 render whose first 5 frames are the last 5 frames of the shot before it, and whose last 5 frames are 5 frames of the shot after it. Those frames are the shots' real latents, written in and masked, so they decode as very nearly the same frames (within a couple of brightness levels in my test) and the joins are plain cuts. Where the two overlap, the shot's own frames are the ones shown.
+- A **bridge** is a normal H3 render whose first frames are frames of the shot before it and whose last frames are frames of the shot after it: 5 at each end by default, 22 if you ask for it (see "How much a bridge holds"). Those frames are the shots' real latents, written in and masked, so they decode as very nearly the same frames (within a couple of brightness levels in my test) and the joins are plain cuts. Where the two overlap, the shot's own frames are the ones shown.
 - All the shots render first. Then the bridges. Nothing is ever rendered from a bridge, so no frame is more than one step from a fresh render and nothing compounds, however long the video is.
 - Inside a bridge, at the frame where its own generated frames meet the locked ones, there was a small one-frame brightness step: 2.95 levels out of 255 at the arriving end, measured on one join. The node eases each bridge's free frames onto the shots at both ends with a colour curve, which took that step to 0.6.
 
@@ -135,6 +135,7 @@ Settings are bare lowercase words right after the marker:
 | `take 2` | Another roll of this piece (a different seed). |
 | `seed 5001` | This exact seed for this piece. |
 | `solo` | Render only this piece. A bridge brings its two shots. |
+| `hold 5`, `hold 22`, `hold 22 remake` | On a bridge line only: how much of its two shots this one bridge holds. See "How much a bridge holds". |
 
 Above the first piece you can describe the pictures, and the node will write the `subject_definitions` and `retention_analysis` lines for each piece from the pictures that piece actually has, with the picture numbers filled in:
 
@@ -197,6 +198,47 @@ Every rendered piece is cached under everything that went into it. A shot depend
 
 The cache lives in `piece_cache/` inside the node's folder and is capped at 8 GB.
 
+## How much a bridge holds
+
+The `bridge_hold` setting says how much of its two neighbours every bridge holds:
+
+| `bridge_hold` | What a bridge does |
+|---|---|
+| `5 frames` (default) | Holds the last 5 frames of the shot before it and 5 frames of the shot after it. |
+| `22 frames` | Holds 22 at each end. |
+| `22 frames, re-make the shot's last 17` | Holds 22 at each end, and starts 17 frames before the shot's end, drawing that ending itself. |
+
+The 22-frame options exist because of roycho87. After seeing this repo he pointed out that 5 frames is not enough for H3 to get a good idea of the motion, so it can easily change the speed, and that the last frames of a clip tend to be rigid, which is exactly what a bridge here was starting from. His own settings (Geiru Context 39 / `drop_last` 17 and Geiru Anchoring 39 / `drop_first` 17) are the third option. He was right: on the running test, with the same shots and only the bridges re-rendered, the pace change between pieces went away.
+
+After using both, this is where I've landed:
+
+- **5 frames** still works well for transitions in a storyboard: short filler actions without sustained movement, or a gap between two actions. With 22 you would cut a good part of a short clip off.
+- **22 frames** is for long-form, continuous movement, where the same pace has to carry through a shot, the bridge and the next shot. It gives much better results, more reliably, and it fixed the slowdown.
+- If you don't mind rendering the extra frames and timing around them, 22 will probably always perform better. It just isn't always needed.
+
+One bridge can go its own way with a word on its storyboard line. This video uses 5 everywhere except the stretch where she keeps walking:
+
+```
+> She picks up the cup.
+~ She sets it down and turns to the door.
+> She walks down the hall.
+~ hold 22 remake She keeps walking, past the windows.
+> She reaches the far door.
+```
+
+A hold only belongs to its bridge, so changing it re-renders that one bridge and nothing else. Both versions stay in the cache, so you can flip back and forth to compare, and `solo` on the same line shows you just that transition.
+
+What it costs. Lengths are what H3 renders, so held frames come out of what a piece adds to the video:
+
+| Piece set to | `5 frames` | `22 frames, re-make the shot's last 17` |
+|---|---|---|
+| 5 s shot | all 5 s is the shot's own | 4.5 s shown (its last 17 frames are the bridge's version) |
+| 5 s bridge | 4.75 s of its own | 3.3 s of its own |
+| 10 s shot | 10 s | 9.4 s |
+| 10 s bridge | 9.7 s | 8.3 s |
+
+With 22, a shot or bridge has to be about 2.3 seconds or longer, and about 3 seconds with the re-make. The node stops with a message naming the piece if one is too short.
+
 ## Other settings
 
 | Setting | What it does |
@@ -206,6 +248,7 @@ The cache lives in `piece_cache/` inside the node's folder and is capped at 8 GB
 | `soundtrack` | `generated` (H3's audio, crossfaded at the joins) or `silent`. |
 | `upscale_pass` | Latent upscale and a short polish per piece. Needs the Latent Upscaler pack. |
 | `frame_labels` | Burns the piece name and frame number into every frame, for review. |
+| `bridge_hold` | How much of its neighbours a bridge holds. See "How much a bridge holds". |
 | `sampler`, `sigmas` | Optional inputs. Not wired, the node uses er_sde, beta, 6 steps (set up for the 4-step turbo LoRA). |
 | `ref_video`, `ref_audio` | Optional references, `<Video 1>` / `<Audio 1>`. A short reference video is looped along the whole timeline. |
 
@@ -214,6 +257,7 @@ The **plan** output lists every piece with its frames, its pictures and any warn
 ## What I learned using it
 
 - **The big one: where a bridge lands in the next shot.** This was the main thing that broke. With a subject in continuous motion (a run), about a third of the joins jumped at the point where a bridge reached the next shot. It never happened where a bridge left a shot. My first fix was regenerating the bridge on new seeds until one landed well, which sort of worked but was a lottery. The real fix was pinning the bridge further into the next shot: 17 frames in, not on its first frame. After that the jumps were gone with no re-rolling, and the node now always does it. The clips above show the same join both ways, and the measurement behind it is under "What might be worth a look".
+- **Longer pieces tend to be paced better.** As a rule of thumb, the longer the clip, the more likely H3 paces the movement correctly. That is how H3 times things, not something this node does. Very short pieces spend most of their length getting into and out of their neighbours.
 - **Size each piece by what happens in it.** Two big chalk words took about 11 seconds. Asked to do it in less, the letters appeared faster than the hand moved.
 - **Put the action that changes the scene in a bridge**, and the small actions around it (turning, picking something up) in the shots on either side.
 - **A place picture carries the room, not the camera.** Without a framing sentence that every piece shares, four shots gave four camera positions.
@@ -223,8 +267,8 @@ The **plan** output lists every piece with its frames, its pictures and any warn
 
 ## Where it's weak
 
-- **Pace between pieces.** Fresh shots don't know each other's tempo. A walk or a run can change speed from one piece to the next. A looped motion reference video helped a lot; a chain (Roy's approach) doesn't have this problem in the first place.
-- **Two of Roy's rules that this node doesn't follow, untested here.** His README recommends clip lengths that are multiples of 3, because held audio otherwise builds up down a chain. Nothing is chained here, so it may not matter, but I haven't checked. His notes also say to hold more frames at the end of a clip than at its start. This node holds 5 and 5.
+- **Pace between pieces, with the default 5-frame holds.** A walk or a run can change speed from one piece to the next. Holding 22 frames fixed this in my tests (see "How much a bridge holds"). What can still happen is one shot picking an odd tempo on its own, since every shot is a fresh render. Re-roll that shot (`solo`, `take 2`), or give every piece a looped motion reference video.
+- **Two of Roy's rules that this node doesn't follow, untested here.** His README recommends clip lengths that are multiples of 3, because held audio otherwise builds up down a chain. Nothing is chained here, so it may not matter, but I haven't checked. His notes also say to hold more frames at the end of a clip than at its start. This node holds the same number at both ends.
 
 ---
 
@@ -289,7 +333,7 @@ With `dialogue` on, the node transcribes the source soundtrack (WhisperX, word t
 ## Credits and related work
 
 - **chanon**, [comfyui-obvpm-timeline](https://github.com/chanon/comfyui-obvpm-timeline): the timeline editor with extend, prepend, bridge and loop from saved latents. Its docs are the best written account I've found of how these joins behave.
-- **roycho87**, [Geiru Context Suite](https://github.com/roycho87/geiru_context_suite) and [NerdNotes](https://github.com/roycho87/NerdNotes): Context, Anchoring, Keystone, the 17-frame block rules, and a lot of careful measurement. The masked hold in this pack follows his nodes' method.
+- **roycho87**, [Geiru Context Suite](https://github.com/roycho87/geiru_context_suite) and [NerdNotes](https://github.com/roycho87/NerdNotes): Context, Anchoring, Keystone, the 17-frame block rules, and a lot of careful measurement. The masked hold in this pack follows his nodes' method, and the 22-frame holds come from his diagnosis of this node's pacing.
 - **drozbay** and **seitanism** for the masked-latent method itself, and **kijai** for ComfyUI's H3 support.
 - The [Minimax H3 Latent Upscaler](https://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler) used by `upscale_pass`.
 
