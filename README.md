@@ -19,7 +19,7 @@ Holding real latents under a mask so the sampler keeps them comes from drozbay (
 **If you're choosing a tool:**
 
 - Want to build a video clip by clip, look at each take, re-roll, trim, loop, upscale the whole cut in one pass? Use chanon's timeline. It does far more than this.
-- Want long chains where motion carries forward naturally from clip to clip, or one long render in windows? Use Roy's suite. His Keystone work holds a chain together well, and a chain keeps pace between clips better than this does.
+- Want long chains where motion carries forward naturally from clip to clip, or one long render in windows? Use Roy's suite. His Keystone work holds a chain together well, and a chain keeps pace between clips better than this does. What you give up is how fast you can change things. In a chain every clip is built on the one before it, so re-doing clip 4 means re-doing everything after it. Here a changed shot costs that shot and the two bridges touching it, and everything else comes back from a cache. The more control you want over individual moments, the more that matters.
 - Want to type a whole storyboard into one box, press Run once and walk away, with each piece only ever one step from a fresh render? That is the one thing this node is for.
 
 ## What might be worth a look
