@@ -34,36 +34,42 @@ Small things I didn't find written down elsewhere. They may well be known.
 
 Most of these have a label burned into the corner: which piece each frame belongs to (shot or bridge), the frame number inside it, and the frames a bridge shares with a shot in yellow.
 
-**The chalkboard storyboard** (3 shots, 2 bridges, 35 seconds, upscaled). The room's reference picture changes twice, each time through a bridge. This is the worked example further down.
+### What it does now
+
+**A storyboard: writing on a chalkboard** (3 shots, 2 bridges, 35 seconds, upscaled). The room's reference picture changes twice, each time through a bridge. This is the worked example further down.
 
 https://github.com/user-attachments/assets/971a092f-26b7-40ec-8fc7-7471c91a90d3
 
-**Arriving on a shot's first frame, against arriving 17 frames in.** Two joins, each shown both ways, at normal speed and then at quarter speed.
+**Continuous movement: a run, 10 seconds per piece, bridges holding 22 frames** (4 shots, 3 bridges, 63 seconds, one prompt, one character sheet, no motion reference). This is how I'd set up long-form movement now.
+
+[![10 second pieces with 22-frame holds](https://img.youtube.com/vi/tmJ6Kr12E8k/hqdefault.jpg)](https://youtube.com/shorts/tmJ6Kr12E8k)
+
+(Opens on YouTube.)
+
+### Things you can choose between
+
+**How much a bridge holds: 5 frames, then 22.** The same four shots of a run. First clip: bridges holding 5 frames. Second clip: only the bridges re-rendered, each holding 22 frames and re-making the last 17 of the shot before it. Shots 1, 2 and 4 are the same footage in both. Shot 3 was re-rolled for the second clip, because the original ran slow on its own from its first frame. For continuous movement like this, 22 is the one to use. 5 is still the better fit for short storyboard transitions; see "How much a bridge holds".
+
+https://github.com/user-attachments/assets/d417e770-16a7-4404-bd67-5b880bb7190f
+
+https://github.com/user-attachments/assets/9b338e8d-2421-4cb1-b367-2f8355f78d0e
+
+### Earlier attempts, and why they were replaced
+
+**Arriving on a shot's first frame.** Two joins, each shown both ways (arriving on the first frame, then arriving 17 frames in), at normal speed and then at quarter speed. Arriving on the first frame jumped on about a third of joins with a moving subject. The node now always arrives 17 frames in, so the first version of each join can no longer happen.
 
 https://github.com/user-attachments/assets/08e3837a-ae41-49ad-9039-d3365375d48c
 
 https://github.com/user-attachments/assets/aa347f72-8aef-4267-af25-41d05994cde3
 
-**A long run WITHOUT the 22-frame holds: 16 shots and 15 bridges of 5 seconds each, one prompt, 2 minutes 34 seconds.** This is here for two reasons. The picture at the end looks like the picture at the start. And it shows what continuous movement does with the default 5-frame holds: **her pace changes from piece to piece, and sometimes drifts inside one.** Watch the labels and you'll see the speed shift as the pieces change. Holding 22 frames mostly fixes this (next clips, and "How much a bridge holds" below). I've left this one up as the example of what happens if you don't.
+**A long run WITHOUT the 22-frame holds: 16 shots and 15 bridges of 5 seconds each, one prompt, 2 minutes 34 seconds.** The picture at the end looks like the picture at the start, which is what it was made to show. But **her pace changes from piece to piece, and sometimes drifts inside one.** Watch the labels and you'll see the speed shift as the pieces change. This is what continuous movement does with 5-frame holds and short pieces. Holding 22 frames mostly fixes it (the clips above), so this is no longer how I'd make a run. It stays up as the example of what happens if you don't.
 
 [![Long run, preview size, with labels](https://img.youtube.com/vi/4NjcilVhwvI/hqdefault.jpg)](https://youtube.com/shorts/4NjcilVhwvI)
 [![The same run through the upscale pass, no labels](https://img.youtube.com/vi/zM0mxxwC2h8/hqdefault.jpg)](https://youtube.com/shorts/zM0mxxwC2h8)
 
 Left: preview size, with labels. Right: the same run through the upscale pass, no labels. (Both open on YouTube.)
 
-**The pace fix: 5-frame holds, then 22-frame holds.** The first four shots of that run. First clip: the original bridges. Second clip: the same shots with only the bridges re-rendered, each holding 22 frames and re-making the last 17 of the shot before it. Shots 1, 2 and 4 are the same footage in both. Shot 3 was re-rolled for the second clip, because the original ran slow on its own from its first frame.
-
-https://github.com/user-attachments/assets/d417e770-16a7-4404-bd67-5b880bb7190f
-
-https://github.com/user-attachments/assets/9b338e8d-2421-4cb1-b367-2f8355f78d0e
-
-**The same test at 10 seconds per piece**, with the 22-frame holds (4 shots, 3 bridges, 63 seconds). Longer pieces give each bridge more room of its own.
-
-[![10 second pieces with 22-frame holds](https://img.youtube.com/vi/tmJ6Kr12E8k/hqdefault.jpg)](https://youtube.com/shorts/tmJ6Kr12E8k)
-
-(Opens on YouTube.)
-
-**The same kind of run with a motion reference** (5 pieces, 25 seconds, made with the 5-frame holds). A short looping clip of a plain mannequin running is given to every piece as `<Video 1>`, so every piece is paced by the same stride. It took most of the pace change out, not all of it.
+**A motion reference with 5-frame holds** (5 pieces, 25 seconds). Before the 22-frame holds, the way to steady the pace was a short looping clip of a plain mannequin running, given to every piece as `<Video 1>`. It took most of the pace change out, not all of it, and a reference video makes every piece slower to render. The 22-frame holds do more of this job for less.
 
 https://github.com/user-attachments/assets/4fde8d3b-f764-4930-b164-ce77bb65b806
 
