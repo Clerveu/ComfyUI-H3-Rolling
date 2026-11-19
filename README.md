@@ -44,14 +44,26 @@ https://github.com/user-attachments/assets/08e3837a-ae41-49ad-9039-d3365375d48c
 
 https://github.com/user-attachments/assets/aa347f72-8aef-4267-af25-41d05994cde3
 
-**A long run: 16 shots and 15 bridges of 5 seconds each, one prompt, 2 minutes 34 seconds.** This is here to show that the picture at the end looks like the picture at the start. It also shows the method's weak spot plainly: **her pace changes from piece to piece, and sometimes drifts inside one.** Each shot is rendered on its own and picks its own tempo, and the bridges have to get from one to the next. Watch the labels and you'll see the speed shift as the pieces change. This run used the default 5-frame holds. Holding 22 frames is what fixed it; see "How much a bridge holds".
+**A long run WITHOUT the 22-frame holds: 16 shots and 15 bridges of 5 seconds each, one prompt, 2 minutes 34 seconds.** This is here for two reasons. The picture at the end looks like the picture at the start. And it shows what continuous movement does with the default 5-frame holds: **her pace changes from piece to piece, and sometimes drifts inside one.** Watch the labels and you'll see the speed shift as the pieces change. Holding 22 frames mostly fixes this (next clips, and "How much a bridge holds" below). I've left this one up as the example of what happens if you don't.
 
 [![Long run, preview size, with labels](https://img.youtube.com/vi/4NjcilVhwvI/hqdefault.jpg)](https://youtube.com/shorts/4NjcilVhwvI)
 [![The same run through the upscale pass, no labels](https://img.youtube.com/vi/zM0mxxwC2h8/hqdefault.jpg)](https://youtube.com/shorts/zM0mxxwC2h8)
 
 Left: preview size, with labels. Right: the same run through the upscale pass, no labels. (Both open on YouTube.)
 
-**The same kind of run with a motion reference** (5 pieces, 25 seconds). A short looping clip of a plain mannequin running is given to every piece as `<Video 1>`, so every piece is paced by the same stride. It took most of the pace change out, not all of it.
+**The pace fix: 5-frame holds, then 22-frame holds.** The first four shots of that run. First clip: the original bridges. Second clip: the same shots with only the bridges re-rendered, each holding 22 frames and re-making the last 17 of the shot before it. Shots 1, 2 and 4 are the same footage in both. Shot 3 was re-rolled for the second clip, because the original ran slow on its own from its first frame.
+
+https://github.com/user-attachments/assets/d417e770-16a7-4404-bd67-5b880bb7190f
+
+https://github.com/user-attachments/assets/9b338e8d-2421-4cb1-b367-2f8355f78d0e
+
+**The same test at 10 seconds per piece**, with the 22-frame holds (4 shots, 3 bridges, 63 seconds). Longer pieces give each bridge more room of its own.
+
+[![10 second pieces with 22-frame holds](https://img.youtube.com/vi/tmJ6Kr12E8k/hqdefault.jpg)](https://youtube.com/shorts/tmJ6Kr12E8k)
+
+(Opens on YouTube.)
+
+**The same kind of run with a motion reference** (5 pieces, 25 seconds, made with the 5-frame holds). A short looping clip of a plain mannequin running is given to every piece as `<Video 1>`, so every piece is paced by the same stride. It took most of the pace change out, not all of it.
 
 https://github.com/user-attachments/assets/4fde8d3b-f764-4930-b164-ce77bb65b806
 
