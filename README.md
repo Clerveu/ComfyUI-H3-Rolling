@@ -9,18 +9,31 @@ Two nodes for long MiniMax H3 videos that never copy a render forward more than 
 
 This is a personal tool, shared for reference. I built it to make my own videos, I'm not maintaining it as a product, and I can't promise support. Take whatever is useful.
 
-**The core idea here is not new, and I found that out late.** Rendering fresh clips and then filling the gap between two of them with a clip that is locked to both is:
+**The core idea here is not unique to this repo.** I worked this out more or less on an island, and only afterwards found that other people had arrived at the same place by their own routes. Rendering fresh clips and then filling the gap between two of them with a clip that is locked to both is also:
 
 - **Bridge** in chanon's [comfyui-obvpm-timeline](https://github.com/chanon/comfyui-obvpm-timeline), which is a full timeline editor, and
-- the "odd shots fresh, even shots continue" example (`withers_has_big_nattys`) in roycho87's [Geiru Context Suite](https://github.com/roycho87/geiru_context_suite), using his Geiru Context and Geiru Anchoring nodes. Roy credits the odd/even order to obvpm.
+- the "odd shots fresh, even shots continue" examples (`everyone_wants_a_piece_of_the_clown`, `withers_has_big_nattys`) in roycho87's [Geiru Context Suite](https://github.com/roycho87/geiru_context_suite), using his Geiru Context and Geiru Anchoring nodes. Roy credits the odd/even order to obvpm.
 
-Holding real latents under a mask so the sampler keeps them comes from drozbay ([MaskVidExperiments](https://github.com/drozbay/MaskVidExperiments)) and seitanism ([Motion-Context-MultiRef](https://github.com/seitanism/ComfyUI-H3-Motion-Context-MultiRef)); I learned it from Roy's nodes. No code from any of those projects is in this pack, but most of the ideas are theirs. I worked on this in parallel without realising how much of it they had already covered, so treat this repo as one more set of notes on the same road, not a different road.
+So where this README lines up with their work, read it as several projects reaching the same conclusions, not as one borrowing from another. Two things here did come directly from Roy, and they're marked where they appear: the masked hold itself, which I picked up from his nodes back in October (he credits drozbay's [MaskVidExperiments](https://github.com/drozbay/MaskVidExperiments) and seitanism's [Motion-Context-MultiRef](https://github.com/seitanism/ComfyUI-H3-Motion-Context-MultiRef) for it), and the 22-frame holds, which came from his feedback on this repo. No code from any of those projects is in this pack.
 
-**If you're choosing a tool:**
+## Which tool for what
 
-- Want to build a video clip by clip, look at each take, re-roll, trim, loop, upscale the whole cut in one pass? Use chanon's timeline. It does far more than this.
-- Want long chains where motion carries forward naturally from clip to clip, or one long render in windows? Use Roy's suite. His Keystone work holds a chain together well, and a chain keeps pace between clips better than this does. What you give up is how fast you can change things. In a chain every clip is built on the one before it, so re-doing clip 4 means re-doing everything after it. Here a changed shot costs that shot and the two bridges touching it, and everything else comes back from a cache. The more control you want over individual moments, the more that matters.
-- Want to type a whole storyboard into one box, press Run once and walk away, with each piece only ever one step from a fresh render? That is the one thing this node is for.
+All three can put a fresh clip between two others. They differ in how you work.
+
+**chanon's timeline is an editor you sit in.** You generate one clip, watch it joined to its neighbours, decide whether to keep it, add it to a timeline, and then extend from it, prepend to it, bridge two clips, or loop. You can cut and trim clips by hand, swap between takes of the same join, drag in outside footage, and upscale the whole cut in one pass at the end. Every decision is made by you, looking at a result. If you want to hand-craft a video join by join, or repair one bad stretch in something that already exists, use his. It does far more than this.
+
+**Roy's suite is for chains and for one long render in windows.** Each clip continues from the one before, so motion carries forward on its own, and his Keystone work keeps a long chain from falling apart. A chain keeps pace between clips better than this does. What you give up is how fast you can change things. In a chain every clip is built on the one before it, so re-doing clip 4 means re-doing everything after it. The more control you want over individual moments, the more that matters.
+
+**This node is a script you run.** You write the whole video down first, as lines of text, and press Run once. It renders every shot, then every bridge, and hands back the finished video. Nothing is decided at the screen while it runs. That makes it the better fit when:
+
+- **You already know the beats.** A scene you can write as "she does this, then this, then this" goes in as one line per piece, each with its own length.
+- **You want to walk away.** A two-minute video is one queue entry. No approving clips as they come.
+- **You expect to revise.** Change one line and only that piece and the bridges touching it render again; the rest comes back from a cache. `solo` renders a single piece, `take 2` re-rolls it, and a different hold on a bridge re-renders just that bridge. Trying five versions of one moment costs five short renders, not five videos.
+- **Things in the scene change.** Reference pictures are switched on and off per piece with a word (`image 3`, `-image 2`), and the node rewrites the prompt's definitions for each piece to match. A prop appears, a room changes, a costume swaps, and the change happens inside a bridge.
+- **The video mixes quick cuts and long movement.** Each bridge can hold 5 or 22 frames, so short storyboard transitions and a long continuous stretch can live in the same video.
+- **You want it inside your own workflow.** It is one node with no other packs required. It takes your model, sampler and sigmas, and the storyboard is plain text you can save next to the project and paste back in.
+
+What it does not do: no timeline to drag things on, no trimming or cutting, no loops, no extending an existing clip, no stopping to look at a take before the next one renders. If you need any of those, the other two are the right tools.
 
 ## What might be worth a look
 
