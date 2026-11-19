@@ -16,6 +16,11 @@ leaves a placeholder, an empty section or a half-built line in what H3 receives.
      take 2          another roll of this piece (a different seed); take 1 is the normal one
      seed 5001       this exact seed for this piece
      solo            render only this piece (a bridge brings its two shots)
+   On a bridge only:
+     hold 5          this bridge holds 5 frames of each neighbour
+     hold 22         ... 22 frames of each neighbour (carries pace across the join)
+     hold 22 remake  ... and starts 17 frames before the shot's end, drawing that ending itself
+   Without it a bridge uses the node's bridge_hold setting. It applies to that one bridge only.
 
 4. Image descriptions, above the first piece.
      image 1: <Subject 1> is the clown woman from the multi-view sheet <Picture>.
@@ -42,6 +47,7 @@ SETTINGS = [
     ("take", re.compile(r"\[?take\s+(\d+)\]?(?=[\s,]|$)")),
     ("seed", re.compile(r"\[?seed\s+(\d+)\]?(?=[\s,]|$)")),
     ("solo", re.compile(r"\[?solo\]?(?=[\s,]|$)")),
+    ("hold", re.compile(r"\[?hold\s+(?:(22)\s+(remake)|(5|22))\]?(?=[\s,]|$)")),
 ]
 IMAGE_LINE = re.compile(r"(?i)^\s*images?\s+(\d+(?:\s*,\s*(?:images?\s+)?\d+)*)\s*:\s*(.*)$")
 KEEP_LINE = re.compile(r"(?i)^\s*keep\s*:\s*(.*)$")
@@ -105,6 +111,8 @@ def parse(text):
                     p["remove" if s.group(1) == "-" else "add"].append(int(s.group(2)))
                 elif key == "solo":
                     p["solo"] = True
+                elif key == "hold":
+                    p["hold"] = [22, 17] if s.group(2) else [int(s.group(3)), 0]
                 elif key == "seconds":
                     p["seconds"] = float(s.group(1))
                 else:
@@ -264,6 +272,12 @@ def build(storyboard, prompt, shots, seed, loaded, has_video=False, has_audio=Fa
         elif p.get("take", 1) > 1:
             base = seed + i // 2 if i % 2 == 0 else seed + 50000 + (i - 1) // 2
             out["seed"] = base + (p["take"] - 1) * 1000
+        if "hold" in p:
+            if p["kind"] == "bridge":
+                out["hold"] = p["hold"]
+            else:
+                notes.append(f"{where}: \"hold\" is a bridge setting (it says how a ~ line grips its two shots); "
+                             "on a shot it does nothing")
         if p.get("solo"):
             if solo is None:
                 solo = i
