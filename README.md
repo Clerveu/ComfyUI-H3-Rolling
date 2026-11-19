@@ -187,6 +187,8 @@ start: image 1, image 2
 - The lines go under `subject_definitions:` and `retention_analysis:` if your prompt has those headings, and are added at the top if it doesn't.
 - `<Picture N>` typed by hand always means `picture_N` and is renumbered for you. If a piece mentions a picture it isn't being handed, the run continues and the **plan** output says so.
 
+For one scene written out in full, with every setting in use and the reason for each, see [STORYBOARD_EXAMPLE.md](STORYBOARD_EXAMPLE.md). It is also the page to hand an agent that will be writing storyboards.
+
 ### Worked example: writing on a chalkboard
 
 Four pictures: a character sheet, and the same room three times (blank board, one line written, both lines written).

@@ -1,0 +1,17 @@
+subject_definitions:
+
+summary:
+[reference generation] {beat}
+
+retention_analysis:
+
+detailed_description:
+Photorealistic live-action footage, filmed by a static camera.
+
+[Shot 1] A static, locked-off, straight-on view of the front wall of <Subject 2>, showing the chalkboard, the lectern and the projector screen. {beat}
+
+overall_soundscape:
+Quiet room tone.
+
+non_diegetic_music:
+N/A
