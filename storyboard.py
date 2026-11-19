@@ -18,8 +18,8 @@ leaves a placeholder, an empty section or a half-built line in what H3 receives.
      solo            render only this piece (a bridge brings its two shots)
    On a bridge only:
      hold 5          this bridge holds 5 frames of each neighbour
-     hold 22         ... 22 frames of each neighbour (carries pace across the join)
-     hold 22 remake  ... and starts 17 frames before the shot's end, drawing that ending itself
+     hold 22         ... 22 frames of each neighbour, starting 17 frames before the shot's end and drawing
+                     that ending itself (carries pace across the join)
    Without it a bridge uses the node's bridge_hold setting. It applies to that one bridge only.
 
 4. Image descriptions, above the first piece.
@@ -47,7 +47,7 @@ SETTINGS = [
     ("take", re.compile(r"\[?take\s+(\d+)\]?(?=[\s,]|$)")),
     ("seed", re.compile(r"\[?seed\s+(\d+)\]?(?=[\s,]|$)")),
     ("solo", re.compile(r"\[?solo\]?(?=[\s,]|$)")),
-    ("hold", re.compile(r"\[?hold\s+(?:(22)\s+(remake)|(5|22))\]?(?=[\s,]|$)")),
+    ("hold", re.compile(r"\[?hold\s+(5|22)\]?(?=[\s,]|$)")),
 ]
 IMAGE_LINE = re.compile(r"(?i)^\s*images?\s+(\d+(?:\s*,\s*(?:images?\s+)?\d+)*)\s*:\s*(.*)$")
 KEEP_LINE = re.compile(r"(?i)^\s*keep\s*:\s*(.*)$")
@@ -112,7 +112,7 @@ def parse(text):
                 elif key == "solo":
                     p["solo"] = True
                 elif key == "hold":
-                    p["hold"] = [22, 17] if s.group(2) else [int(s.group(3)), 0]
+                    p["hold"] = [22, 17] if s.group(1) == "22" else [5, 0]
                 elif key == "seconds":
                     p["seconds"] = float(s.group(1))
                 else:

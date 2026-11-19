@@ -18,11 +18,11 @@ start: image 1, image 2
 
 > 7s <Subject 1> (S1) stands at the left end of the chalkboard, points at the writing with her right hand and says, <d>[English] Nobody warned me. So I am warning you.</d> She lowers her hand.
 
-~ 10s hold 22 remake <Subject 1> paces slowly along the front of the chalkboard, from its left end to its right end and back.
+~ 10s hold 22 <Subject 1> paces slowly along the front of the chalkboard, from its left end to its right end and back.
 
 > 10s take 2 <Subject 1> paces slowly back and forth in front of the chalkboard.
 
-~ 10s hold 22 remake <Subject 1> paces slowly back and forth in front of the chalkboard.
+~ 10s hold 22 <Subject 1> paces slowly back and forth in front of the chalkboard.
 
 > 10s <Subject 1> paces slowly back and forth in front of the chalkboard, then stops in front of the writing and holds still for a beat.
 

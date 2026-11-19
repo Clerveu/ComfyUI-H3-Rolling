@@ -99,11 +99,11 @@ start: image 1, image 2
 
 > 7s <Subject 1> (S1) stands at the left end of the chalkboard, points at the writing with her right hand and says, <d>[English] Nobody warned me. So I am warning you.</d> She lowers her hand.
 
-~ 10s hold 22 remake <Subject 1> paces slowly along the front of the chalkboard, from its left end to its right end and back.
+~ 10s hold 22 <Subject 1> paces slowly along the front of the chalkboard, from its left end to its right end and back.
 
 > 10s take 2 <Subject 1> paces slowly back and forth in front of the chalkboard.
 
-~ 10s hold 22 remake <Subject 1> paces slowly back and forth in front of the chalkboard.
+~ 10s hold 22 <Subject 1> paces slowly back and forth in front of the chalkboard.
 
 > 10s <Subject 1> paces slowly back and forth in front of the chalkboard, then stops in front of the writing and holds still for a beat.
 
@@ -145,7 +145,7 @@ start: image 1, image 2
 | `-image 2` | Stop handing `picture_2` over. | **Yes.** |
 | `take 2` | A different roll of this piece. | No. |
 | `seed 5001` | This exact seed for this piece. | No. |
-| `hold 5` / `hold 22` / `hold 22 remake` | Bridges only: how this bridge grips its two shots. | No. |
+| `hold 5` / `hold 22` | Bridges only: how this bridge grips its two shots. | No. |
 | `solo` | Render only this piece. | No. |
 
 The rule behind the last column: pictures are part of the scene, so they stay until something changes them. Everything else is a decision about one piece.
@@ -163,20 +163,20 @@ The rule behind the last column: pictures are part of the scene, so they stay un
 | 5 | Shot 3: puts the chalk down, turns | `image 4 -image 3` | No length, so it uses `shot_seconds`. The room is now the two-line picture. |
 | 6 | Bridge 3: walks to the board | (none) | Default length, default 5-frame hold. A short move with a clear start and end. |
 | 7 | Shot 4: points and speaks | `7s` | Dialogue goes inside a shot, with the speaker tag `(S1)` on the same speaker each time. |
-| 8 | Bridge 4: starts pacing | `10s hold 22 remake` | From here the movement is continuous, so the bridge holds 22 frames of each neighbour and re-draws the last 17 of shot 4. Ten seconds, because long continuous movement paces better in longer pieces. |
+| 8 | Bridge 4: starts pacing | `10s hold 22` | From here the movement is continuous, so the bridge holds 22 frames of each neighbour. With 22 it starts 17 frames before shot 4 ends and draws that ending itself. Ten seconds, because long continuous movement paces better in longer pieces. |
 | 9 | Shot 5: pacing | `10s take 2` | `take 2` stands for "the first roll of this shot came out slow, so I rolled again and kept the second". |
-| 10 | Bridge 5: pacing | `10s hold 22 remake` | Same pace has to carry from shot 5 into shot 6. |
+| 10 | Bridge 5: pacing | `10s hold 22` | Same pace has to carry from shot 5 into shot 6. |
 | 11 | Shot 6: pacing, then stops | `10s` | Ends on a held beat, so the next piece starts from stillness. |
 | 12 | Bridge 6: wipes the board | `9s` | The room changes back. The bridge keeps the two-line picture and ends locked to a shot rendered from the blank one. Back to the default hold: she starts from a standstill. |
 | 13 | Shot 7: puts the eraser down | `4s image 2 -image 4` | Pictures can go back to an earlier one. |
-| 14 | Bridge 7: walks to the lectern | `hold 22` | A walk, so 22 frames, but without `remake`: shot 7 is short and its ending is worth keeping. |
+| 14 | Bridge 7: walks to the lectern | `hold 22` | A walk, so 22 frames. Shot 7 is short, but at 3.8 seconds still long enough for it. |
 | 15 | Shot 8: asks for questions | `6s` | |
 | 16 | Bridge 8: steps out | `3s` | Three quick 3 second pieces follow. This is what the 5-frame hold is for: with 22, most of a 3 second piece would be copies of its neighbours. |
 | 17 | Shot 9: bows | `3s` | She is beside the lectern, not behind it. A bow behind a lectern goes into the lectern. |
 | 18 | Bridge 9: straightens | `3s` | |
 | 19 | Shot 10: smiles, holds | (none) | Default length. A held beat gives the video an ending. |
 
-Lengths as the node snaps them: 6.6, 10.8, 1.6, 11.5, 5.2, 5.2, 7.3, 10.1, 10.1, 10.1, 10.1, 8.7, 3.8, 5.2, 5.9, 3.0, 3.0, 3.0 and 5.2 seconds. The finished video is about 1 minute 57 seconds, because each bridge overlaps its two shots by the frames it holds.
+Lengths as the node snaps them: 6.6, 10.8, 1.6, 11.5, 5.2, 5.2, 7.3, 10.1, 10.1, 10.1, 10.1, 8.7, 3.8, 5.2, 5.9, 3.0, 3.0, 3.0 and 5.2 seconds. The finished video is just under two minutes, because each bridge overlaps its two shots by the frames it holds.
 
 ## What H3 actually receives
 
@@ -232,10 +232,10 @@ You would not render all nineteen pieces and hope. The order that wastes the lea
 4. **Compare holds on one join.** Put `solo` on a bridge and it renders with its two shots (which come from the cache), so you see just that transition:
 
    ```
-   ~ 10s solo hold 22 remake <Subject 1> paces slowly ...
+   ~ 10s solo hold 22 <Subject 1> paces slowly ...
    ```
 
-   Change `hold 22 remake` to `hold 5` and run again. Only the bridge re-renders, and both versions stay cached, so switching back costs nothing.
+   Change `hold 22` to `hold 5` and run again. Only the bridge re-renders, and both versions stay cached, so switching back costs nothing.
 
 5. **Turn `upscale_pass` on last.** Pieces already rendered at preview size are upscaled from the cache, so you get the same performance you approved, larger.
 
@@ -244,7 +244,7 @@ You would not render all nineteen pieces and hope. The order that wastes the lea
 Stops with a message naming the piece:
 
 - Two shots or two bridges in a row, or a storyboard that ends on a bridge.
-- A piece too short for its holds. With `hold 22` a shot or bridge needs about 2.3 seconds; with `hold 22 remake`, about 3.
+- A piece too short for its holds. With `hold 22` a shot or bridge needs about 3 seconds.
 
 Carries on, with a `note:` line in the plan:
 

@@ -61,7 +61,7 @@ https://github.com/user-attachments/assets/971a092f-26b7-40ec-8fc7-7471c91a90d3
 
 ### Things you can choose between
 
-**How much a bridge holds: 5 frames, then 22.** The same four shots of a run. First clip: bridges holding 5 frames. Second clip: only the bridges re-rendered, each holding 22 frames and re-making the last 17 of the shot before it. Shots 1, 2 and 4 are the same footage in both. Shot 3 was re-rolled for the second clip, because the original ran slow on its own from its first frame. For continuous movement like this, 22 is the one to use. 5 is still the better fit for short storyboard transitions; see "How much a bridge holds".
+**How much a bridge holds: 5 frames, then 22.** The same four shots of a run. First clip: bridges holding 5 frames. Second clip: only the bridges re-rendered, each holding 22 frames. Shots 1, 2 and 4 are the same footage in both. Shot 3 was re-rolled for the second clip, because the original ran slow on its own from its first frame. For continuous movement like this, 22 is the one to use. 5 is still the better fit for short storyboard transitions; see "How much a bridge holds".
 
 https://github.com/user-attachments/assets/d417e770-16a7-4404-bd67-5b880bb7190f
 
@@ -170,7 +170,7 @@ Settings are bare lowercase words right after the marker:
 | `take 2` | Another roll of this piece (a different seed). |
 | `seed 5001` | This exact seed for this piece. |
 | `solo` | Render only this piece. A bridge brings its two shots. |
-| `hold 5`, `hold 22`, `hold 22 remake` | On a bridge line only: how much of its two shots this one bridge holds. See "How much a bridge holds". |
+| `hold 5`, `hold 22` | On a bridge line only: how much of its two shots this one bridge holds. See "How much a bridge holds". |
 
 Above the first piece you can describe the pictures, and the node will write the `subject_definitions` and `retention_analysis` lines for each piece from the pictures that piece actually has, with the picture numbers filled in:
 
@@ -242,10 +242,9 @@ The `bridge_hold` setting says how much of its two neighbours every bridge holds
 | `bridge_hold` | What a bridge does |
 |---|---|
 | `5 frames` (default) | Holds the last 5 frames of the shot before it and 5 frames of the shot after it. |
-| `22 frames` | Holds 22 at each end. |
-| `22 frames, re-make the shot's last 17` | Holds 22 at each end, and starts 17 frames before the shot's end, drawing that ending itself. |
+| `22 frames` | Holds 22 at each end. It starts 17 frames before the shot's end and draws that ending itself. |
 
-The 22-frame options exist because of roycho87. After seeing this repo he pointed out that 5 frames is not enough for H3 to get a good idea of the motion, so it can easily change the speed, and that the last frames of a clip tend to be rigid, which is exactly what a bridge here was starting from. His own settings (Geiru Context 39 / `drop_last` 17 and Geiru Anchoring 39 / `drop_first` 17) are the third option. He was right: on the running test, with the same shots and only the bridges re-rendered, the pace change between pieces went away.
+The 22-frame setting exists because of roycho87. After seeing this repo he pointed out that 5 frames is not enough for H3 to get a good idea of the motion, so it can easily change the speed, and that the last frames of a clip tend to be rigid, which is exactly what a bridge here was starting from. The setting copies his own (Geiru Context 39 / `drop_last` 17 and Geiru Anchoring 39 / `drop_first` 17). He was right: on the running test, with the same shots and only the bridges re-rendered, the pace change between pieces went away.
 
 After using both, this is where I've landed:
 
@@ -259,7 +258,7 @@ One bridge can go its own way with a word on its storyboard line. This video use
 > She picks up the cup.
 ~ She sets it down and turns to the door.
 > She walks down the hall.
-~ hold 22 remake She keeps walking, past the windows.
+~ hold 22 She keeps walking, past the windows.
 > She reaches the far door.
 ```
 
@@ -267,14 +266,14 @@ A hold only belongs to its bridge, so changing it re-renders that one bridge and
 
 What it costs. Lengths are what H3 renders, so held frames come out of what a piece adds to the video:
 
-| Piece set to | `5 frames` | `22 frames, re-make the shot's last 17` |
+| Piece set to | `5 frames` | `22 frames` |
 |---|---|---|
 | 5 s shot | all 5 s is the shot's own | 4.5 s shown (its last 17 frames are the bridge's version) |
 | 5 s bridge | 4.75 s of its own | 3.3 s of its own |
 | 10 s shot | 10 s | 9.4 s |
 | 10 s bridge | 9.7 s | 8.3 s |
 
-With 22, a shot or bridge has to be about 2.3 seconds or longer, and about 3 seconds with the re-make. The node stops with a message naming the piece if one is too short.
+With 22, a shot or bridge has to be about 3 seconds or longer. The node stops with a message naming the piece if one is too short.
 
 ## Other settings
 
