@@ -199,6 +199,13 @@ The node then writes the subject_definitions and retention_analysis lines for ea
 <Picture N> typed by hand always means picture_N. JSON (a list of pieces) is still accepted here."""
 
 
+BRIDGE_HOLDS = {
+    "5 frames": (5, 0),
+    "22 frames": (22, 0),
+    "22 frames, re-make the shot's last 17": (22, 17),
+}
+
+
 class H3RollingTimeline:
     """A long H3 video from pictures and prompts, no source video. The video is a list of pieces: shots rendered
     on their own, and bridges pinned between each pair of shots. Nothing is ever rendered from a bridge.
@@ -247,6 +254,8 @@ class H3RollingTimeline:
                 "upscale_denoise": ("FLOAT", {"default": 0.4, "min": 0.05, "max": 1.0, "step": 0.05}),
                 "frame_labels": ("BOOLEAN", {"default": False,
                                              "tooltip": "Burn in which piece and which frame of it every frame is, plus the frame number and time. For review."}),
+                "bridge_hold": (list(BRIDGE_HOLDS), {"default": "5 frames",
+                                                     "tooltip": "How much of its two neighbours a bridge holds. 5 frames: the last 5 of the shot before and 5 of the shot after. 22 frames: 22 at each end, which gives H3 about a second of real motion to match, so pace carries across the join. 22 frames, re-make the shot's last 17: the same, but the bridge starts 17 frames before the shot's end and draws that ending itself (the end of a clip tends to go stiff). The last one is roycho87's Geiru Context 39 / drop_last 17 with Geiru Anchoring 39 / drop_first 17. With 22, shots and bridges need to be about 2.6 seconds or longer."}),
             },
             "optional": optional,
         }
@@ -254,7 +263,7 @@ class H3RollingTimeline:
     def run(self, model, clip, vae, audio_vae, prompt, storyboard="", shots=1, shot_seconds=5.0, bridge_seconds=5.0,
             width=864, height=480, seed=0, ref_image_size="max", soundtrack="generated",
             upscale_pass=False, upscale_megapixels=1.5, upscale_steps=2, upscale_denoise=0.4, frame_labels=False,
-            sampler=None, sigmas=None, ref_video=None, ref_audio=None,
+            bridge_hold="5 frames", sampler=None, sigmas=None, ref_video=None, ref_audio=None,
             # not on the node any more; still honoured from an API graph or lab.json
             timeline="", beat="", steps=6, sampler_name="er_sde", scheduler="beta", pin_mode="mask", **pictures):
         from . import storyboard as storyboard_mod
@@ -281,7 +290,8 @@ class H3RollingTimeline:
             ref_image_size, pin_mode=pin_mode, soundtrack=soundtrack, upscale_pass=upscale_pass,
             upscale_megapixels=upscale_megapixels, upscale_steps=upscale_steps, upscale_denoise=upscale_denoise,
             frame_labels=frame_labels, pictures=[pictures.get(f"picture_{i}") for i in range(1, 10)],
-            ref_video=ref_video, ref_audio=ref_audio, sampler=sampler, sigmas=sigmas, solo=solo, extra_notes=notes)
+            ref_video=ref_video, ref_audio=ref_audio, sampler=sampler, sigmas=sigmas, solo=solo, extra_notes=notes,
+            hold=BRIDGE_HOLDS.get(bridge_hold, (5, 0)))
 
 
 NODE_CLASS_MAPPINGS = {

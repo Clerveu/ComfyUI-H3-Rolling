@@ -340,7 +340,7 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
                  steps, sampler_name, scheduler, seed, ref_image_size, pin_mode="mask", soundtrack="generated",
                  upscale_pass=False, upscale_megapixels=1.5, upscale_steps=2, upscale_denoise=0.4,
                  frame_labels=False, pictures=(), ref_video=None, ref_audio=None, sampler=None, sigmas=None,
-                 solo=None, extra_notes=()):
+                 solo=None, extra_notes=(), hold=(PIN, 0)):
     import sys
 
     import comfy.model_management
@@ -365,7 +365,7 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
     notes = list(extra_notes) + notes
     P = len(pieces)
     N = (P + 1) // 2
-    hold, drop = int(lab.get("hold_frames", PIN)), int(lab.get("drop_tail", 0))
+    hold, drop = int(lab.get("hold_frames", hold[0])), int(lab.get("drop_tail", hold[1]))
     if pin_mode != "mask":
         hold, drop = PIN, 0
     if (hold - 5) % 17 or hold < 5 or drop % 17 or drop < 0:
