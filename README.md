@@ -54,6 +54,10 @@ https://github.com/user-attachments/assets/d417e770-16a7-4404-bd67-5b880bb7190f
 
 https://github.com/user-attachments/assets/9b338e8d-2421-4cb1-b367-2f8355f78d0e
 
+**Layering a motion reference on top of the 22-frame holds** (4 shots, 3 bridges, 28 seconds). Every piece is also given a short looping clip of a plain mannequin running as `<Video 1>`. This is a demonstration of what you can stack to help the movement *between* pieces: the holds carry the pace across each join, and the reference gives every piece the same stride to follow. It is not a claim about what happens inside a piece. There is still some slight skipping in H3's own animation here, which is mostly a matter of timing and not of this technique. The next thing to try for that is longer shots and bridges. These are not the same shots as the 5-frame version further down; a reference video gives each piece a different slice of the loop depending on where it sits.
+
+https://github.com/user-attachments/assets/e90a2dc7-8bd3-4bba-8819-3d9fb92cd57a
+
 ### Earlier attempts, and why they were replaced
 
 **Arriving on a shot's first frame.** Two joins, each shown both ways (arriving on the first frame, then arriving 17 frames in), at normal speed and then at quarter speed. Arriving on the first frame jumped on about a third of joins with a moving subject. The node now always arrives 17 frames in, so the first version of each join can no longer happen.
