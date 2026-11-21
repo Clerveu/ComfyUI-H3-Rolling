@@ -189,7 +189,29 @@ Things to know:
 - **The plan output tells you which frame it used**, and the still is saved as `output/h3_rolling/timeline_<time>_still.png` so you can look at it.
 - **`solo` runs don't have it.** A solo piece renders without the still and the plan says so.
 
-When you do have a reference picture of the place, that picture does most of this job and a shared framing sentence does the rest, so `{still}` matters most for places that are only described. I have not yet tested the two together on a storyboard.
+### Starting from a picture of the place: `{still 2}`
+
+If you do have a reference picture of the place, you can use it to make shot 1 and then never send it again. Put a number in the word: `{still 2}` means "`picture_2` stands in for the still until the still exists."
+
+```text
+The woman in <Picture 1> walks slowly along the wooden fence of a horse corral at sunrise, seen full-length from the side.
+{still 2} shows the place.
+```
+
+With a character sheet in `picture_1`, the place in `picture_2` and `shots` set to 2, this is what H3 is handed:
+
+| Piece | Pictures | The second line reads |
+|---|---|---|
+| shot 1 | your character sheet, your place picture | `<Picture 2> shows the place.` |
+| bridge 1, shot 2 and every piece after | your character sheet, the frame of shot 1 | `<Picture 2> shows the place.` |
+
+The words are the same for every piece. What changes is which picture is behind the tag: your place picture for the first render, then what H3 made of it. A reference picture is one empty view of a set, and each fresh shot reads it a little differently. The frame of shot 1 is the place as it was actually drawn, lit and framed, with your subject in it.
+
+- With a number, the line stays in shot 1's prompt (it's true there too), so there's nothing to keep on its own line.
+- Only one picture can stand in. If nothing is plugged into that input, it's treated as a plain `{still}` and the plan output says so.
+- The plan output lists which pictures each piece got.
+
+I've run this once, on the prompt above (two shots and a bridge): shot 2 was never handed the place picture and came back in the same corral, same cliff, same sun. One run is one run. I have not tried it on a long timeline or together with the storyboard box's own `image` settings.
 
 ## The storyboard box
 

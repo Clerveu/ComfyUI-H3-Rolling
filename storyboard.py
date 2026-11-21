@@ -33,6 +33,10 @@ leaves a placeholder, an empty section or a half-built line in what H3 receives.
 
 <Picture N> typed by hand always means picture_N; it is rewritten to the number H3 will know that picture by
 in each piece. A tag for a picture a piece doesn't have is reported in the plan and left alone.
+
+{still} in the prompt is the frame the node cuts from shot 1 and hands to every later piece (rolling_timeline
+does that part). {still 2} is the same thing with a stand-in: shot 1 is handed picture_2 where the still will
+be, and every later piece gets the still there and is never handed picture_2.
 """
 import re
 
@@ -52,6 +56,7 @@ SETTINGS = [
 IMAGE_LINE = re.compile(r"(?i)^\s*images?\s+(\d+(?:\s*,\s*(?:images?\s+)?\d+)*)\s*:\s*(.*)$")
 KEEP_LINE = re.compile(r"(?i)^\s*keep\s*:\s*(.*)$")
 START_LINE = re.compile(r"(?i)^\s*start\s*:\s*(.*)$")
+STILL_N = re.compile(r"\{still (\d+)\}")
 
 
 def nearest_length(frames):
@@ -244,6 +249,27 @@ def build(storyboard, prompt, shots, seed, loaded, has_video=False, has_audio=Fa
         if n not in loaded:
             notes.append(f"image {n} has a description and nothing is plugged into picture_{n}")
 
+    # {still N}: picture_N stands in for the still in shot 1, and is dropped once the still exists
+    words = [prompt or "", beat or ""] + [p["text"] for p in raw]
+    named = {int(n) for w in words for n in STILL_N.findall(w)}
+    if len(named) > 1:
+        raise ValueError("{still N}: one picture stands in for the still, and the words name "
+                         + " and ".join(f"{{still {n}}}" for n in sorted(named)))
+    stand_in = named.pop() if named else None
+    if stand_in is not None and stand_in not in loaded:
+        notes.append(f"{{still {stand_in}}}: nothing is plugged into picture_{stand_in}, so it was read as a plain {{still}}")
+        stand_in, no_stand_in = None, True
+    else:
+        no_stand_in = False
+    if stand_in is not None:
+        notes.append(f"{{still {stand_in}}}: picture_{stand_in} goes to shot 1 only; every later piece gets the "
+                     "frame of shot 1 in its place")
+
+    def still_words(text, first):
+        if stand_in is not None:
+            return STILL_N.sub(f"<Picture {stand_in}>" if first else "{still}", text or "")
+        return STILL_N.sub("{still}", text or "") if no_stand_in else (text or "")
+
     pieces, solo = [], None
     for i, p in enumerate(raw):
         where = f"shot {i // 2 + 1}" if i % 2 == 0 else f"bridge {(i + 1) // 2}"
@@ -254,11 +280,15 @@ def build(storyboard, prompt, shots, seed, loaded, has_video=False, has_audio=Fa
                 notes.append(f"{where}: image {n} asked for and nothing is plugged into picture_{n}")
         for n in p["remove"]:
             have.discard(n)
-        mine = sorted(have)
+        mine = set(have)
+        if stand_in is not None:
+            (mine.add if i == 0 else mine.discard)(stand_in)
+        mine = sorted(mine)
         if len(mine) > 9:
             mine = mine[:9]
         out = {"kind": p["kind"], "final": True,
-               "prompt": compose(prompt, p["text"] or beat, mine, images, where, notes),
+               "prompt": compose(still_words(prompt, i == 0), still_words(p["text"] or beat, i == 0), mine,
+                                 images, where, notes),
                "media": [f"picture_{loaded.index(n) + 1}" for n in mine]
                         + ["video"] * bool(has_video) + ["audio"] * bool(has_audio)}
         if not out["prompt"]:
