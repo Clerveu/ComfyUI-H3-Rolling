@@ -148,6 +148,49 @@ Put a prompt in **prompt**, plug in your pictures, set **shots**. Every piece ge
 
 There are nine picture inputs (H3's limit) and they take anything that outputs an image: plain Load Image nodes, as in the starter workflow, or any media loader. Empty inputs are ignored, and the input's number is the picture's number even if lower ones are empty.
 
+## Keeping the place the same without a place picture: `{still}`
+
+Every shot is a fresh render, so if the place only exists in your words (no reference picture of it), each shot draws its own version of it. `{still}` is how the shots agree.
+
+Write `{still}` anywhere in the **prompt** and the node will:
+
+1. Render shot 1 from your pictures and words alone.
+2. Cut one frame from the middle of shot 1.
+3. Hand that frame to every later piece, shots and bridges, as one extra picture, and put its picture tag wherever you wrote `{still}`.
+
+So every piece after the first has seen what shot 1 actually looked like, and no piece is ever more than one step away from that first render. The run clips above were made this way.
+
+Give the still a job in the prompt, the same way you would any other picture. This is the prompt from the run clips:
+
+```text
+subject_definitions:
+<Subject 1> is the clown woman from the multi-view sheet <Picture 1>. The sheet shows several views of one woman; there is one woman.
+{still} shows the place and how the camera frames <Subject 1> in it.
+
+summary:
+[reference generation] {beat}
+
+retention_analysis:
+<Subject 1> (throughout [Shot 1]): fully_preserved - her appearance and clothing from <Picture 1>.
+{still}: attribute_transfer - the dirt road, the prairie, the distant hills, the daylight, and how large <Subject 1> is in the frame.
+
+detailed_description:
+Photorealistic live-action footage in bright daylight.
+
+[Shot 1] A three-quarter front view of <Subject 1> from her head to her shins, filling the height of the frame, on a straight dirt road across open prairie, with tall grass on both sides of the road and a line of low hills far off on the horizon. {beat}
+```
+
+Things to know:
+
+- **Whole lines that mention `{still}` are left out of shot 1's prompt**, because the still doesn't exist yet. Keep each mention on its own line, as above.
+- **It counts as a picture.** H3 takes nine, so a piece that uses the still can have eight of its own. The still is always the last one.
+- **Say what it's for, and keep that to the place and the framing.** The still also shows where your subject was standing and what she was doing in the middle of shot 1, and pieces can drift toward that pose if the prompt lets them. Describing it as the place and how the camera frames her, never as her, is what worked for me.
+- **It's the frame you approved.** The still is cut at preview size even when `upscale_pass` is on, so turning the upscale on later reuses the same still and the same cached pieces.
+- **The plan output tells you which frame it used**, and the still is saved as `output/h3_rolling/timeline_<time>_still.png` so you can look at it.
+- **`solo` runs don't have it.** A solo piece renders without the still and the plan says so.
+
+When you do have a reference picture of the place, that picture does most of this job and a shared framing sentence does the rest, so `{still}` matters most for places that are only described. I have not yet tested the two together on a storyboard.
+
 ## The storyboard box
 
 Optional. Everything in it is optional too: leave a part out and nothing is added for it.
@@ -296,6 +339,7 @@ The **plan** output lists every piece with its frames, its pictures and any warn
 - **Longer pieces tend to be paced better.** As a rule of thumb, the longer the clip, the more likely H3 paces the movement correctly. That is how H3 times things, not something this node does. Very short pieces spend most of their length getting into and out of their neighbours.
 - **Size each piece by what happens in it.** Two big chalk words took about 11 seconds. Asked to do it in less, the letters appeared faster than the hand moved.
 - **Put the action that changes the scene in a bridge**, and the small actions around it (turning, picking something up) in the shots on either side.
+- **A place that's only described needs `{still}`.** Without it, every shot draws the place again from the words and they don't match. See "Keeping the place the same without a place picture".
 - **A place picture carries the room, not the camera.** Without a framing sentence that every piece shares, four shots gave four camera positions.
 - **Say "static, locked-off"** if you don't want a long bridge to push in and pull back out.
 - **A bad first frame can be the seed, not the words.** Re-roll that one shot with `solo`.
