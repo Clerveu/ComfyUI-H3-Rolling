@@ -1,0 +1,562 @@
+{
+ "id": "86b13bfe-d859-499b-ba39-825801c52019",
+ "revision": 0,
+ "last_node_id": 14,
+ "last_link_id": 8,
+ "nodes": [
+  {
+   "id": 3,
+   "type": "CLIPLoader",
+   "pos": [
+    0,
+    260
+   ],
+   "size": [
+    420,
+    106
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "CLIP",
+     "type": "CLIP",
+     "links": [
+      1
+     ],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "CLIPLoader"
+   },
+   "widgets_values": [
+    "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+    "minimax",
+    "default"
+   ],
+   "title": "H3 text encoder"
+  },
+  {
+   "id": 4,
+   "type": "VAELoader",
+   "pos": [
+    0,
+    410
+   ],
+   "size": [
+    420,
+    58
+   ],
+   "flags": {},
+   "order": 1,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "VAE",
+     "type": "VAE",
+     "links": [
+      2
+     ],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "VAELoader"
+   },
+   "widgets_values": [
+    "minimax_h3_video_vae_int8_convrot.safetensors"
+   ],
+   "title": "Video VAE"
+  },
+  {
+   "id": 5,
+   "type": "VAELoader",
+   "pos": [
+    0,
+    510
+   ],
+   "size": [
+    420,
+    58
+   ],
+   "flags": {},
+   "order": 2,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "VAE",
+     "type": "VAE",
+     "links": [
+      3
+     ],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "VAELoader"
+   },
+   "widgets_values": [
+    "minimax_h3_audio_vae_fp32.safetensors"
+   ],
+   "title": "Audio VAE"
+  },
+  {
+   "id": 6,
+   "type": "LoadImage",
+   "pos": [
+    460,
+    0
+   ],
+   "size": [
+    250,
+    320
+   ],
+   "flags": {},
+   "order": 3,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      4
+     ],
+     "slot_index": 0
+    },
+    {
+     "name": "MASK",
+     "type": "MASK",
+     "links": [],
+     "slot_index": 1
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "LoadImage"
+   },
+   "widgets_values": [
+    "",
+    "image"
+   ],
+   "title": "image 1: the person"
+  },
+  {
+   "id": 7,
+   "type": "LoadImage",
+   "pos": [
+    720,
+    0
+   ],
+   "size": [
+    250,
+    320
+   ],
+   "flags": {},
+   "order": 4,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      5
+     ],
+     "slot_index": 0
+    },
+    {
+     "name": "MASK",
+     "type": "MASK",
+     "links": [],
+     "slot_index": 1
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "LoadImage"
+   },
+   "widgets_values": [
+    "",
+    "image"
+   ],
+   "title": "image 2: the room"
+  },
+  {
+   "id": 8,
+   "type": "LoadImage",
+   "pos": [
+    980,
+    0
+   ],
+   "size": [
+    250,
+    320
+   ],
+   "flags": {},
+   "order": 5,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      6
+     ],
+     "slot_index": 0
+    },
+    {
+     "name": "MASK",
+     "type": "MASK",
+     "links": [],
+     "slot_index": 1
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "LoadImage"
+   },
+   "widgets_values": [
+    "",
+    "image"
+   ],
+   "title": "image 3: the room, changed"
+  },
+  {
+   "id": 9,
+   "type": "LoadImage",
+   "pos": [
+    1240,
+    0
+   ],
+   "size": [
+    250,
+    320
+   ],
+   "flags": {},
+   "order": 6,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      7
+     ],
+     "slot_index": 0
+    },
+    {
+     "name": "MASK",
+     "type": "MASK",
+     "links": [],
+     "slot_index": 1
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "LoadImage"
+   },
+   "widgets_values": [
+    "",
+    "image"
+   ],
+   "title": "image 4: the room, changed again"
+  },
+  {
+   "id": 10,
+   "type": "H3RollingRoyale",
+   "pos": [
+    460,
+    370
+   ],
+   "size": [
+    820,
+    1500
+   ],
+   "flags": {},
+   "order": 7,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "clip",
+     "type": "CLIP",
+     "link": 1
+    },
+    {
+     "name": "vae",
+     "type": "VAE",
+     "link": 2
+    },
+    {
+     "name": "audio_vae",
+     "type": "VAE",
+     "link": 3
+    },
+    {
+     "name": "picture_1",
+     "type": "IMAGE",
+     "link": 4,
+     "shape": 7
+    },
+    {
+     "name": "picture_2",
+     "type": "IMAGE",
+     "link": 5,
+     "shape": 7
+    },
+    {
+     "name": "picture_3",
+     "type": "IMAGE",
+     "link": 6,
+     "shape": 7
+    },
+    {
+     "name": "picture_4",
+     "type": "IMAGE",
+     "link": 7,
+     "shape": 7
+    },
+    {
+     "name": "picture_5",
+     "type": "IMAGE",
+     "link": null,
+     "shape": 7
+    },
+    {
+     "name": "picture_6",
+     "type": "IMAGE",
+     "link": null,
+     "shape": 7
+    },
+    {
+     "name": "picture_7",
+     "type": "IMAGE",
+     "link": null,
+     "shape": 7
+    },
+    {
+     "name": "picture_8",
+     "type": "IMAGE",
+     "link": null,
+     "shape": 7
+    },
+    {
+     "name": "picture_9",
+     "type": "IMAGE",
+     "link": null,
+     "shape": 7
+    },
+    {
+     "name": "ref_video",
+     "type": "IMAGE",
+     "link": null,
+     "shape": 7
+    },
+    {
+     "name": "ref_audio",
+     "type": "AUDIO",
+     "link": null,
+     "shape": 7
+    }
+   ],
+   "outputs": [
+    {
+     "name": "report",
+     "type": "STRING",
+     "links": [
+      8
+     ],
+     "slot_index": 0
+    },
+    {
+     "name": "folder",
+     "type": "STRING",
+     "links": [],
+     "slot_index": 1
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "H3RollingRoyale"
+   },
+   "widgets_values": [
+    "Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8.safetensors",
+    "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+    1.0,
+    true,
+    "minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors",
+    1.0,
+    false,
+    "none",
+    1.0,
+    false,
+    "none",
+    1.0,
+    false,
+    6,
+    "er_sde",
+    "beta",
+    "subject_definitions:\n\nsummary:\n[reference generation] {beat}\n\nretention_analysis:\n\ndetailed_description:\nPhotorealistic live-action footage, filmed by a static camera.\n\n[Shot 1] A static, locked-off, straight-on view of the front wall of <Subject 2>, showing the chalkboard, the lectern and the projector screen. {beat}\n\noverall_soundscape:\nQuiet room tone.\n\nnon_diegetic_music:\nN/A",
+    "image 1: <Subject 1> is the clown woman from the multi-view sheet <Picture>. The sheet shows several views of one woman; there is one woman.\n  keep: her appearance and clothing from <Picture>\nimage 2, 3, 4: <Subject 2> is the lecture room in <Picture>.\n  keep: the room in <Picture>\nstart: image 1, image 2\n\n> 6.5s seed 5001 <Subject 1> (S1) stands facing the camera with both hands on the top of the lectern and says, <d>[English] Blackboard test, take one.</d> She then turns around to face the clean, empty chalkboard, picks up a stick of chalk from the tray and holds it up near the top left of the chalkboard.\n\n~ 11s <Subject 1> stands facing the chalkboard with her back to the camera and writes \"LATENT SPACE\" with the stick of chalk in large capital letters across the upper half of the chalkboard.\n\n> 1.5s image 3 -image 2 <Subject 1> stands facing the chalkboard with her back to the camera, lifts the stick of chalk off the chalkboard and lowers her hand to the left side of the chalkboard, below the line of writing, holding the chalk just off the surface.\n\n~ 277f <Subject 1> stands facing the chalkboard with her back to the camera and writes \"IS A TRAP!\" with the stick of chalk in large capital letters across the chalkboard, below the line already written.\n\n> image 4 -image 3 <Subject 1> puts the stick of chalk back in the tray, turns around to face the camera and rests both hands on the top of the lectern.\n\n~ <Subject 1> steps out from behind the lectern and walks to the left end of the chalkboard.\n\n> 7s <Subject 1> (S1) stands at the left end of the chalkboard, points at the writing with her right hand and says, <d>[English] Nobody warned me. So I am warning you.</d> She lowers her hand.\n\n~ 10s hold 22 <Subject 1> paces slowly along the front of the chalkboard, from its left end to its right end and back.\n\n> 10s take 2 <Subject 1> paces slowly back and forth in front of the chalkboard.\n\n~ 10s hold 22 <Subject 1> paces slowly back and forth in front of the chalkboard.\n\n> 10s <Subject 1> paces slowly back and forth in front of the chalkboard, then stops in front of the writing and holds still for a beat.\n\n~ 9s <Subject 1> picks up the eraser from the chalk tray and wipes the writing off the chalkboard with broad strokes, leaving the chalkboard clean.\n\n> 4s image 2 -image 4 <Subject 1> puts the eraser back in the chalk tray and claps the chalk dust from her hands.\n\n~ hold 22 <Subject 1> walks back to the lectern and stands behind it.\n\n> 6s <Subject 1> (S1) stands behind the lectern with both hands on its top, looks at the camera and says, <d>[English] Any questions?</d> She holds still for a beat.\n\n~ 3s <Subject 1> straightens up and steps out to stand beside the lectern.\n\n> 3s <Subject 1> stands beside the lectern and takes a small bow.\n\n~ 3s <Subject 1> straightens up from the bow.\n\n> <Subject 1> stands beside the lectern, smiles at the camera and holds still for a beat.",
+    "# one arm per line; only what differs from the node's own settings\n# hold = 22\n# lora 1 strength = 0.6 | 0.8\n# lora 2 = on; lora 1 = off; steps = 8\n# control",
+    1,
+    5.0,
+    5.0,
+    864,
+    480,
+    4242,
+    "fixed",
+    1,
+    "max",
+    "generated",
+    false,
+    1.5,
+    2,
+    0.4,
+    false,
+    "5 frames",
+    "run"
+   ],
+   "title": "H3 Rolling Royale"
+  },
+  {
+   "id": 13,
+   "type": "PreviewAny",
+   "pos": [
+    1320,
+    370
+   ],
+   "size": [
+    520,
+    520
+   ],
+   "flags": {},
+   "order": 8,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "source",
+     "type": "*",
+     "link": 8
+    }
+   ],
+   "outputs": [
+    {
+     "name": "STRING",
+     "type": "STRING",
+     "links": [],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "PreviewAny"
+   },
+   "widgets_values": [],
+   "title": "Report: the arms, the estimate, each take's time. Page: /h3royale"
+  },
+  {
+   "id": 14,
+   "type": "MarkdownNote",
+   "pos": [
+    0,
+    620
+   ],
+   "size": [
+    420,
+    900
+   ],
+   "flags": {},
+   "order": 9,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [],
+   "properties": {
+    "Node name for S&R": "MarkdownNote"
+   },
+   "widgets_values": [
+    "### H3 Rolling Royale\n\nOne Timeline scene rendered several ways on the same seed, to compare settings. Results page: **/h3royale** on this Comfy's address.\n\n1. Set the node up as you would the Timeline node: prompt, storyboard, pictures, sizes. Pick the model and LoRAs **on the node** (it loads them itself so arms can swap them). That is the **baseline**, arm 0.\n2. A LoRA slot that is filled but switched off isn't used by the baseline; an arm can turn it on.\n3. **arms**: one line per extra arm, saying only what is different.\n\n```\nhold = 22\nlora 2 = on; lora 1 = off; steps = 8\nlora 1 strength = 0.6 | 0.8 | 1.0\ncross: steps = 4 | 6; size = 1024x576 | 864x480\na = locked-off tripod shot | (empty)\ncontrol\n# a note\n```\n\n- `;` separates several changes in one arm. `|` is a sweep: one arm per value. Two sweeps on a line need `cross:` in front.\n- `control` is the baseline again with the piece cache off: how much two identical runs differ.\n- **Slots**: `{a}` in the prompt or storyboard is a slot. `{a: handheld, slight sway}` gives it the baseline's words. An arm line `a = ...` changes them. Slot arms run on at least 3 seeds unless the line says `seeds = 1`.\n\nWhat a line can change: `model`, `lora N` (on / off / a strength), `lora N strength`, `lora N file`, `steps`, `sampler`, `scheduler`, `size`, `shot seconds`, `bridge seconds`, `hold`, `upscale`, `upscale mp`, `upscale steps`, `upscale denoise`, `pictures`, `seeds`, and slot letters. Names can be any unique part of the file name.\n\n4. **mode = plan only** lists the arms, counts the takes and estimates the time without rendering.\n5. **seeds_per_arm**: every arm on this many seeds (seed, seed + 1000, seed + 2000).\n\nPieces two arms share come from the piece cache, so they render once; a take's time with a `*` on the page includes cached pieces.\n\n**The page**: every take plays on one playhead. Space = play, `,` `.` = one frame, `[` `]` = jump to a join. Click two takes, then Enter = A/B; S switches side by side / flip in place, F flips. Thumbs and notes are saved in the run's folder (`output/h3_royale/<time>/votes.json`)."
+   ],
+   "title": "How to"
+  }
+ ],
+ "links": [
+  [
+   1,
+   3,
+   0,
+   10,
+   0,
+   "CLIP"
+  ],
+  [
+   2,
+   4,
+   0,
+   10,
+   1,
+   "VAE"
+  ],
+  [
+   3,
+   5,
+   0,
+   10,
+   2,
+   "VAE"
+  ],
+  [
+   4,
+   6,
+   0,
+   10,
+   3,
+   "IMAGE"
+  ],
+  [
+   5,
+   7,
+   0,
+   10,
+   4,
+   "IMAGE"
+  ],
+  [
+   6,
+   8,
+   0,
+   10,
+   5,
+   "IMAGE"
+  ],
+  [
+   7,
+   9,
+   0,
+   10,
+   6,
+   "IMAGE"
+  ],
+  [
+   8,
+   10,
+   0,
+   13,
+   0,
+   "STRING"
+  ]
+ ],
+ "groups": [],
+ "config": {},
+ "extra": {
+  "ds": {
+   "scale": 0.7,
+   "offset": [
+    60,
+    60
+   ]
+  }
+ },
+ "version": 0.4
+}
