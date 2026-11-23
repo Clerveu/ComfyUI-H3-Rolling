@@ -134,7 +134,7 @@
     "Node name for S&R": "H3RollingPicture"
    },
    "widgets_values": [
-    "none",
+    "(empty).png",
     "image"
    ],
    "title": "image 1: the person"
@@ -168,7 +168,7 @@
     "Node name for S&R": "H3RollingPicture"
    },
    "widgets_values": [
-    "none",
+    "(empty).png",
     "image"
    ],
    "title": "image 2: the room"
@@ -202,7 +202,7 @@
     "Node name for S&R": "H3RollingPicture"
    },
    "widgets_values": [
-    "none",
+    "(empty).png",
     "image"
    ],
    "title": "image 3: the room, changed"
@@ -236,7 +236,7 @@
     "Node name for S&R": "H3RollingPicture"
    },
    "widgets_values": [
-    "none",
+    "(empty).png",
     "image"
    ],
    "title": "image 4: the room, changed again"
