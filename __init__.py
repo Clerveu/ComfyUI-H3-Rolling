@@ -408,3 +408,12 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "H3RollingRoyale": "H3 Rolling Royale (compare settings)",
 }
 WEB_DIRECTORY = "./web"
+
+# The Royale results page: http://<this Comfy>:8188/h3royale
+try:
+    from server import PromptServer
+
+    from . import royale_server
+    royale_server.register(PromptServer.instance.routes)
+except Exception as e:  # the nodes still work without the page
+    print(f"[H3 Rolling Royale] results page not available: {e}")

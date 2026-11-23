@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>H3 Royale</title>
+<style>
+  :root { --bg:#141518; --panel:#1d1f24; --line:#30333b; --text:#e4e6ea; --dim:#8d93a0; --accent:#ffb454; --b:#6cb6ff;
+          --good:#6bd08b; --bad:#ef6b6b; --shot:#3a3f4b; --bridge:#7a5a22; --held:#c9973a; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.35 system-ui, Segoe UI, sans-serif; padding-bottom:120px; }
+  header { display:flex; gap:12px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  header h1 { font-size:16px; margin:0; font-weight:600; }
+  select, button, input { font:inherit; color:var(--text); background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:4px 8px; }
+  button { cursor:pointer; }
+  button:hover { border-color:var(--dim); }
+  #status { color:var(--dim); }
+  #gridwrap { overflow-x:auto; padding:12px 16px; }
+  table { border-collapse:separate; border-spacing:8px; }
+  th { vertical-align:bottom; text-align:left; font-weight:500; min-width:220px; max-width:420px; }
+  th .n { color:var(--dim); font-size:12px; }
+  th .d { display:block; }
+  th details { font-weight:400; font-size:12px; color:var(--dim); margin-top:4px; }
+  th pre { white-space:pre-wrap; max-height:320px; overflow:auto; background:var(--panel); padding:8px; border-radius:6px; color:var(--text); }
+  mark { background:#5a4413; color:#ffd58a; border-radius:3px; padding:0 2px; }
+  td.rowhead { color:var(--dim); font-size:12px; white-space:nowrap; vertical-align:top; padding-top:6px; }
+  .cell { background:var(--panel); border:2px solid transparent; border-radius:8px; padding:4px; }
+  .cell.selA { border-color:var(--accent); }
+  .cell.selB { border-color:var(--b); }
+  .cell video { display:block; width:100%; background:#000; border-radius:5px; cursor:pointer; }
+  .cell .meta { display:flex; gap:6px; align-items:center; margin-top:4px; font-size:12px; color:var(--dim); }
+  .cell .meta input { flex:1; min-width:40px; padding:2px 6px; font-size:12px; }
+  .cell .meta button { padding:1px 6px; font-size:13px; opacity:.55; }
+  .cell .meta button.on { opacity:1; }
+  .cell .meta button.up.on { border-color:var(--good); }
+  .cell .meta button.down.on { border-color:var(--bad); }
+  .cell .tag { font-weight:700; margin-right:2px; }
+  .cell.selA .tag { color:var(--accent); } .cell.selB .tag { color:var(--b); }
+  .note { padding:22px 10px; text-align:center; color:var(--dim); min-height:110px; }
+  .note.err { color:var(--bad); text-align:left; font-size:12px; }
+  #bar { position:fixed; left:0; right:0; bottom:0; background:#101114ee; border-top:1px solid var(--line); padding:8px 16px 10px; z-index:30; }
+  #controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  #readout { font:13px ui-monospace, Consolas, monospace; color:var(--dim); min-width:250px; }
+  #scrub { position:relative; height:26px; margin-top:8px; background:var(--shot); border-radius:5px; cursor:pointer; overflow:hidden; user-select:none; }
+  #scrub .seg { position:absolute; top:0; bottom:0; }
+  #scrub .bridge { background:var(--bridge); }
+  #scrub .held { background:var(--held); }
+  #scrub .lbl { position:absolute; top:5px; font-size:11px; color:#fff9; pointer-events:none; white-space:nowrap; }
+  #head { position:absolute; top:0; bottom:0; width:2px; background:#fff; pointer-events:none; }
+  .keys { color:var(--dim); font-size:12px; margin-left:auto; }
+  #ab { position:fixed; inset:0 0 104px 0; background:#0b0c0eF2; z-index:20; display:none; flex-direction:column; padding:10px 16px; }
+  #ab.open { display:flex; }
+  #abtop { display:flex; gap:10px; align-items:center; margin-bottom:8px; }
+  #abstage { flex:1; min-height:0; display:flex; gap:10px; position:relative; }
+  #abstage .pane { flex:1; min-width:0; display:flex; flex-direction:column; }
+  #abstage .pane .cap { font-size:13px; margin-bottom:4px; }
+  #abstage .pane.A .cap b { color:var(--accent); } #abstage .pane.B .cap b { color:var(--b); }
+  #abstage video { flex:1; min-height:0; width:100%; object-fit:contain; background:#000; border-radius:6px; }
+  #abstage.flip .pane { position:absolute; inset:0; }
+  #abstage.flip .pane.hide { visibility:hidden; }
+  .legend { font-size:12px; color:var(--dim); display:flex; gap:10px; align-items:center; }
+  .sw { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:3px; vertical-align:-1px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>H3 Royale</h1>
+  <select id="runs"></select>
+  <button id="reload" title="Reload the run list">Reload</button>
+  <span id="status"></span>
+</header>
+<div id="gridwrap"><table id="grid"></table></div>
+
+<div id="ab">
+  <div id="abtop">
+    <button id="abmode">Flip in place (F)</button>
+    <button id="abswap" style="display:none">Show the other (F)</button>
+    <span class="legend">Click any two takes in the grid to change A and B.</span>
+    <button id="abclose" style="margin-left:auto">Close (Esc)</button>
+  </div>
+  <div id="abstage"></div>
+</div>
+
+<div id="bar">
+  <div id="controls">
+    <button id="play">Play</button>
+    <button id="back" title="One frame back (,)">&#9664; frame</button>
+    <button id="fwd" title="One frame forward (.)">frame &#9654;</button>
+    <button id="pseam" title="Previous join ([)">&#9664; join</button>
+    <button id="nseam" title="Next join (])">join &#9654;</button>
+    <select id="speed"><option value="1">1x</option><option value="0.5">1/2</option><option value="0.25">1/4</option></select>
+    <button id="abopen" title="Compare the two selected takes (Enter)">A / B</button>
+    <span id="readout"></span>
+    <span class="legend"><span><span class="sw" style="background:var(--shot)"></span>shot</span>
+      <span><span class="sw" style="background:var(--bridge)"></span>bridge</span>
+      <span><span class="sw" style="background:var(--held)"></span>frames a bridge holds from its shots</span></span>
+    <span class="keys">space play &middot; , . frame &middot; [ ] join &middot; enter A/B &middot; F flip</span>
+  </div>
+  <div id="scrub"><div id="head"></div></div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const SLOT = /\{([a-z])(?::([^{}]*))?\}/g;
+let man = null, runId = null, votes = {}, pollTimer = null, voteTimer = null;
+let cells = {};            // "arm-take" -> {el, video, take, arm}
+let synced = [];           // every video element following the clock
+let sel = [];              // up to two keys: [A, B]
+let clock = { t: 0, playing: false, last: 0, rate: 1 };
+let abFlip = false, abShow = 0;
+
+// ------------------------------------------------------------ data
+async function loadRuns(keep) {
+  const runs = await (await fetch("/h3royale/runs")).json();
+  const s = $("runs");
+  s.innerHTML = runs.map((r) => `<option value="${r.id}">${r.id.replace("_", " ")} - ${r.arms} arms, ${r.done}/${r.takes} takes${r.status === "done" ? "" : " (" + r.status + ")"} - ${esc(r.what)}</option>`).join("");
+  const want = keep || new URLSearchParams(location.search).get("run") || (runs[0] && runs[0].id);
+  if (want && runs.some((r) => r.id === want)) s.value = want;
+  if (s.value && s.value !== runId) openRun(s.value);
+  if (!runs.length) $("status").textContent = "No runs yet. Run an H3 Rolling Royale node and they show up here.";
+}
+
+async function openRun(id) {
+  runId = id; sel = []; cells = {}; synced = []; clock.t = 0; setPlaying(false);
+  history.replaceState(null, "", "?run=" + id);
+  votes = await (await fetch(`/h3royale/run/${id}/votes.json`)).json().catch(() => ({}));
+  man = null;
+  await refresh(true);
+}
+
+async function refresh(first) {
+  if (!runId) return;
+  const m = await (await fetch(`/h3royale/run/${runId}/royale.json`)).json();
+  const sig = (x) => JSON.stringify(x.arms.map((a) => a.takes.map((t) => t.status)));
+  const changed = !man || sig(m) !== sig(man);
+  man = m;
+  if (changed) build();
+  const takes = m.arms.flatMap((a) => a.takes), done = takes.filter((t) => t.status === "done").length;
+  const secs = takes.reduce((s, t) => s + (t.seconds || 0), 0);
+  $("status").textContent = `${m.status} - ${done}/${takes.length} takes - ${fmt(secs)} of rendering - seed ${m.seed}`;
+  clearTimeout(pollTimer);
+  if (m.status === "running") pollTimer = setTimeout(() => refresh(false), 3000);
+}
+
+const fmt = (s) => { s = Math.round(s); return s >= 3600 ? `${Math.floor(s / 3600)}h ${String(Math.floor(s % 3600 / 60)).padStart(2, "0")}m` : s >= 60 ? `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s` : `${s}s`; };
+
+// ------------------------------------------------------------ the grid
+function promptHtml(arm) {
+  const slots = arm.settings.slots || {};
+  const fill = (text) => esc(text).replace(SLOT, (_, k, d) => `<mark>${esc(k in slots ? slots[k] : (d || "").trim()) || "&nbsp;"}</mark>`);
+  return `<b>prompt</b>\n${fill(man.prompt)}\n\n<b>storyboard</b>\n${fill(man.storyboard)}`;
+}
+
+function settingsText(arm) {
+  const s = arm.settings, l = (s.loras || []).filter((x) => x.on && x.file && x.file !== "none").map((x) => `${x.file} @ ${x.strength}`);
+  return [`model: ${s.model}`, `loras: ${l.join(", ") || "none"}`, `${s.steps} steps, ${s.sampler}, ${s.scheduler}`,
+    `${s.width}x${s.height}, shots ${s.shot_seconds}s, bridges ${s.bridge_seconds}s, hold ${s.hold}`,
+    `upscale: ${s.upscale ? `${s.upscale_mp} MP, ${s.upscale_steps} steps @ ${s.upscale_denoise}` : "off"}`,
+    `pictures: ${s.ref_image_size}`].join("\n");
+}
+
+function build() {
+  const keepT = clock.t;
+  const old = cells; cells = {}; synced = synced.filter((v) => v.dataset.ab);
+  const rows = Math.max(...man.arms.map((a) => a.takes.length));
+  const g = $("grid");
+  g.innerHTML = "";
+  const hr = g.insertRow();
+  hr.insertCell().outerHTML = "<th></th>";
+  for (const a of man.arms) {
+    const th = document.createElement("th");
+    const diff = a.n === 0 ? ["baseline"] : (a.diff && a.diff.length ? a.diff : [a.label]);
+    th.innerHTML = `<span class="n">arm ${a.n}</span>` + diff.map((d) => `<span class="d">${esc(d)}</span>`).join("") +
+      `<details><summary>settings and prompt</summary><pre>${esc(settingsText(a))}\n\n${promptHtml(a)}</pre></details>`;
+    hr.appendChild(th);
+  }
+  for (let r = 0; r < rows; r++) {
+    const tr = g.insertRow();
+    const seedOf = man.arms.map((a) => a.takes[r]).find(Boolean);
+    const rh = tr.insertCell(); rh.className = "rowhead"; rh.innerHTML = `seed ${r + 1}<br>${seedOf ? seedOf.seed : ""}`;
+    for (const a of man.arms) {
+      const td = tr.insertCell(), t = a.takes[r];
+      if (!t) continue;
+      const key = `${a.n}-${r}`;
+      // keep an existing player if this take was already on the page
+      if (old[key] && old[key].take.status === "done" && t.status === "done") {
+        cells[key] = { ...old[key], take: t, arm: a }; td.appendChild(old[key].el); synced.push(old[key].video); continue;
+      }
+      const el = document.createElement("div"); el.className = "cell";
+      let video = null;
+      if (t.status === "done") {
+        video = document.createElement("video");
+        video.src = `/h3royale/run/${runId}/${t.file}`; video.muted = true; video.playsInline = true; video.preload = "auto";
+        video.onclick = () => pick(key);
+        el.appendChild(video);
+        const from = [t.rendered ? `${t.rendered} rendered` : "", t.upscaled ? `${t.upscaled} upscaled` : "", t.cached ? `${t.cached} from cache` : ""].filter(Boolean).join(", ");
+        const meta = document.createElement("div"); meta.className = "meta";
+        meta.innerHTML = `<span class="tag"></span><span title="${esc(from)}">${fmt(t.seconds)}${t.cached || t.upscaled ? "*" : ""}</span>
+          <button class="up" title="Good">&#128077;</button><button class="down" title="Bad">&#128078;</button><input placeholder="note">`;
+        const [up, down] = meta.querySelectorAll("button"), note = meta.querySelector("input");
+        const v = votes[key] || {};
+        up.classList.toggle("on", v.vote === "up"); down.classList.toggle("on", v.vote === "down"); note.value = v.note || "";
+        const set = (vote) => { const cur = votes[key] || {}; votes[key] = { ...cur, vote: cur.vote === vote ? null : vote, label: a.n === 0 ? "baseline" : (a.diff || []).join(" | "), seed: t.seed };
+          up.classList.toggle("on", votes[key].vote === "up"); down.classList.toggle("on", votes[key].vote === "down"); saveVotes(); };
+        up.onclick = () => set("up"); down.onclick = () => set("down");
+        note.oninput = () => { votes[key] = { ...(votes[key] || {}), note: note.value, label: a.n === 0 ? "baseline" : (a.diff || []).join(" | "), seed: t.seed }; saveVotes(); };
+        note.onkeydown = (e) => e.stopPropagation();
+        el.appendChild(meta);
+        synced.push(video);
+      } else {
+        const n = document.createElement("div");
+        n.className = "note" + (t.status === "failed" ? " err" : "");
+        n.textContent = t.status === "failed" ? `failed: ${t.error || ""}` : t.status === "rendering" ? "rendering..." : t.status;
+        el.appendChild(n);
+      }
+      td.appendChild(el);
+      cells[key] = { el, video, take: t, arm: a };
+    }
+  }
+  sel = sel.filter((k) => cells[k] && cells[k].video);
+  if (!sel.length) { const first = Object.keys(cells).find((k) => cells[k].video); if (first) sel = [first]; }
+  clock.t = keepT;
+  paintSel(); drawScrub(); seekAll();
+}
+
+function saveVotes() {
+  clearTimeout(voteTimer);
+  voteTimer = setTimeout(() => fetch(`/h3royale/run/${runId}/votes`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(votes) }), 400);
+}
+
+// ------------------------------------------------------------ selection, sound, A/B
+function pick(key) {
+  if (!sel.includes(key)) sel = sel.length < 2 ? [...sel, key] : [sel[1], key];
+  lastHeard = key;
+  paintSel(); drawScrub(); if ($("ab").classList.contains("open")) openAB();
+}
+let lastHeard = null;
+function paintSel() {
+  for (const [k, c] of Object.entries(cells)) {
+    c.el.classList.toggle("selA", sel[0] === k); c.el.classList.toggle("selB", sel[1] === k);
+    const tag = c.el.querySelector(".tag"); if (tag) tag.textContent = sel[0] === k ? "A" : sel[1] === k ? "B" : "";
+  }
+  applySound();
+}
+function applySound() {
+  const ab = $("ab").classList.contains("open");
+  const heard = ab ? null : (lastHeard && cells[lastHeard] ? lastHeard : sel[0]);
+  for (const [k, c] of Object.entries(cells)) if (c.video) c.video.muted = k !== heard;
+  const panes = [...document.querySelectorAll("#abstage video")];
+  panes.forEach((v, i) => { v.muted = !(ab && i === (abFlip ? abShow : 0)); });
+}
+function label(k) { const c = cells[k]; return `arm ${c.arm.n}: ${c.arm.n === 0 ? "baseline" : (c.arm.diff || []).join(" | ")} - seed ${c.take.seed}`; }
+
+function openAB() {
+  if (sel.length < 2) { $("status").textContent = "Click two takes first, then A / B."; return; }
+  synced = synced.filter((v) => !v.dataset.ab);
+  const stage = $("abstage"); stage.innerHTML = ""; stage.classList.toggle("flip", abFlip);
+  sel.forEach((k, i) => {
+    const pane = document.createElement("div"); pane.className = "pane " + "AB"[i] + (abFlip && i !== abShow ? " hide" : "");
+    pane.innerHTML = `<div class="cap"><b>${"AB"[i]}</b> ${esc(label(k))}</div>`;
+    const v = document.createElement("video"); v.src = cells[k].video.src; v.muted = true; v.playsInline = true; v.preload = "auto"; v.dataset.ab = "1";
+    pane.appendChild(v); stage.appendChild(pane); synced.push(v);
+  });
+  $("ab").classList.add("open");
+  $("abmode").textContent = abFlip ? "Side by side (S)" : "Flip in place (S)";
+  $("abswap").style.display = abFlip ? "" : "none";
+  applySound(); seekAll(); if (clock.playing) playAll();
+}
+function closeAB() { $("ab").classList.remove("open"); synced = synced.filter((v) => !v.dataset.ab); $("abstage").innerHTML = ""; applySound(); }
+function flip() {
+  if (!$("ab").classList.contains("open")) return;
+  if (!abFlip) { abFlip = true; abShow = 0; openAB(); return; }
+  abShow = 1 - abShow;
+  document.querySelectorAll("#abstage .pane").forEach((p, i) => p.classList.toggle("hide", i !== abShow));
+  applySound();
+}
+
+// ------------------------------------------------------------ one clock for every player
+const fps = () => (man && man.fps) || 24;
+function refTake() { const k = sel[0] && cells[sel[0]] ? sel[0] : Object.keys(cells).find((x) => cells[x].video); return k ? cells[k].take : null; }
+function total() { const ts = Object.values(cells).filter((c) => c.video).map((c) => c.take.frames || 0); return ts.length ? Math.max(...ts) / fps() : 0; }
+function targetFor(v) { const d = isFinite(v.duration) ? v.duration : 1e9; return Math.min(clock.t, Math.max(0, d - 0.5 / fps())); }
+function seekAll() { for (const v of synced) { try { v.currentTime = targetFor(v) + 0.25 / fps(); } catch (e) {} } readout(); }
+function playAll() { for (const v of synced) { v.playbackRate = clock.rate; if (clock.t < (isFinite(v.duration) ? v.duration : 1e9) - 0.05) v.play().catch(() => {}); } }
+function setPlaying(p) {
+  clock.playing = p; clock.last = performance.now();
+  $("play").textContent = p ? "Pause" : "Play";
+  if (p) { seekAll(); playAll(); } else { for (const v of synced) v.pause(); seekAll(); }
+}
+function tick(now) {
+  if (clock.playing) {
+    clock.t += (now - clock.last) / 1000 * clock.rate; clock.last = now;
+    const T = total();
+    if (T && clock.t >= T) { clock.t = 0; seekAll(); playAll(); }
+    for (const v of synced) {
+      const want = targetFor(v);
+      if (v.paused && want < v.duration - 0.06) v.play().catch(() => {});
+      if (!v.seeking && Math.abs(v.currentTime - want) > 0.09) v.currentTime = want;
+    }
+    readout();
+  }
+  requestAnimationFrame(tick);
+}
+function frameOf() { return Math.floor(clock.t * fps() + 1e-6); }
+function gotoFrame(f) { const T = Math.max(0, Math.round(total() * fps()) - 1); clock.t = Math.min(T, Math.max(0, f)) / fps(); if (clock.playing) setPlaying(false); else seekAll(); }
+function step(d) { gotoFrame(frameOf() + d); }
+function pieceAt(f) { const t = refTake(); if (!t || !t.pieces) return null; let hit = null; for (const p of t.pieces) if (f >= p.start && f < p.start + p.frames) hit = p; return hit; }
+function readout() {
+  const f = frameOf(), p = pieceAt(f);
+  $("readout").textContent = `${clock.t.toFixed(2)}s  frame ${f}` + (p ? `  ${p.name} +${f - p.start}` : "");
+  const T = total(); $("head").style.left = (T ? clock.t / T * 100 : 0) + "%";
+}
+function joins() {
+  const t = refTake(); if (!t || !t.pieces) return [];
+  const out = new Set();
+  for (const p of t.pieces) if (p.kind === "bridge") { const h = p.hold || 5; [p.start, p.start + h, p.start + p.frames - h, p.start + p.frames].forEach((x) => out.add(x)); }
+  return [...out].sort((a, b) => a - b);
+}
+function seam(d) { const f = frameOf(), js = joins(); const nx = d > 0 ? js.find((x) => x > f) : [...js].reverse().find((x) => x < f); if (nx !== undefined) gotoFrame(nx); }
+
+function drawScrub() {
+  const s = $("scrub"); s.querySelectorAll(".seg,.lbl").forEach((e) => e.remove());
+  const t = refTake(), T = Math.round(total() * fps()); if (!t || !t.pieces || !T) return;
+  const add = (cls, a, b) => { const e = document.createElement("div"); e.className = "seg " + cls; e.style.left = a / T * 100 + "%"; e.style.width = (b - a) / T * 100 + "%"; s.insertBefore(e, $("head")); };
+  for (const p of t.pieces) {
+    if (p.kind === "bridge") { const h = p.hold || 5; add("bridge", p.start, p.start + p.frames); add("held", p.start, p.start + h); add("held", p.start + p.frames - h, p.start + p.frames); }
+    const l = document.createElement("div"); l.className = "lbl"; l.textContent = p.name; l.style.left = `calc(${(p.start + (p.kind === "bridge" ? (p.hold || 5) : 0)) / T * 100}% + 4px)`; s.insertBefore(l, $("head"));
+  }
+}
+
+// ------------------------------------------------------------ wiring
+$("runs").onchange = (e) => openRun(e.target.value);
+$("reload").onclick = () => loadRuns(runId).then(() => refresh(false));
+$("play").onclick = () => setPlaying(!clock.playing);
+$("back").onclick = () => step(-1); $("fwd").onclick = () => step(1);
+$("pseam").onclick = () => seam(-1); $("nseam").onclick = () => seam(1);
+$("speed").onchange = (e) => { clock.rate = +e.target.value; for (const v of synced) v.playbackRate = clock.rate; };
+$("abopen").onclick = openAB; $("abclose").onclick = closeAB; $("abswap").onclick = flip;
+$("abmode").onclick = () => { abFlip = !abFlip; abShow = 0; openAB(); };
+let dragging = false;
+const scrubTo = (e) => { const r = $("scrub").getBoundingClientRect(); gotoFrame(Math.round(Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) * total() * fps())); };
+$("scrub").onpointerdown = (e) => { dragging = true; $("scrub").setPointerCapture(e.pointerId); scrubTo(e); };
+$("scrub").onpointermove = (e) => { if (dragging) scrubTo(e); };
+$("scrub").onpointerup = () => { dragging = false; };
+document.onkeydown = (e) => {
+  if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+  const k = e.key;
+  if (k === " ") { e.preventDefault(); setPlaying(!clock.playing); }
+  else if (k === "," || k === "ArrowLeft") step(-1);
+  else if (k === "." || k === "ArrowRight") step(1);
+  else if (k === "[") seam(-1); else if (k === "]") seam(1);
+  else if (k === "Enter") { $("ab").classList.contains("open") ? closeAB() : openAB(); }
+  else if (k === "Escape") closeAB();
+  else if (k === "f" || k === "F") flip();
+  else if (k === "s" || k === "S") { if ($("ab").classList.contains("open")) { abFlip = !abFlip; abShow = 0; openAB(); } }
+};
+requestAnimationFrame(tick);
+loadRuns();
+</script>
+</body>
+</html>

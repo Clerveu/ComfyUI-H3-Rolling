@@ -490,5 +490,5 @@ def run_royale(clip, vae, audio_vae, prompt, storyboard, arms_text, base, shots,
                 lines.append(f"  arm {a['n']} seed {tk['seed']}: {_hms(tk['seconds'])} ({src}) -> {tk['file']}")
             else:
                 lines.append(f"  arm {a['n']} seed {tk['seed']}: {tk['status']}" + (f" - {tk['error']}" if tk.get("error") else ""))
-    report = plan + f"\n\nfolder: {folder}\ntook {_hms(man['finished'] - man['started'])}\n" + "\n".join(lines)
+    report = plan + f"\n\npage: /h3royale?run={run_id} on this Comfy's address\nfolder: {folder}\ntook {_hms(man['finished'] - man['started'])}\n" + "\n".join(lines)
     return report, folder
