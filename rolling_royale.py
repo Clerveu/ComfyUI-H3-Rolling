@@ -343,14 +343,23 @@ def run_royale(clip, vae, audio_vae, prompt, storyboard, arms_text, base, shots,
     for a in arms:
         a["diff"] = ["control (cache off)"] if a["control"] else diff_lines(a["S"], base)
         a["chain"] = chain_of(a["S"])
-    seen = {}
+    # an arm that comes out the same as the baseline or as an earlier arm (usual in a sweep that includes the
+    # baseline's own value) is left out and named in the plan
+    seen, kept, skipped = {}, [arms[0]], []
     for a in arms[1:]:
-        if not a["control"] and not a["diff"]:
-            raise ValueError(f"arm \"{a['label']}\" is the same as the baseline. Use the word  control  for a repeat.")
-        sig = json.dumps([a["S"], a["control"]], sort_keys=True, default=str)
-        if sig in seen and not a["control"]:
-            raise ValueError(f"arm \"{a['label']}\" is the same as arm \"{seen[sig]}\"")
-        seen[sig] = a["label"]
+        sig = json.dumps(a["S"], sort_keys=True, default=str)
+        if a["control"]:
+            kept.append(a)
+        elif not a["diff"]:
+            skipped.append(f"\"{a['label']}\" is the baseline")
+        elif sig in seen:
+            skipped.append(f"\"{a['label']}\" is the same as \"{seen[sig]}\"")
+        else:
+            seen[sig] = a["label"]
+            kept.append(a)
+    arms = kept
+    for i, a in enumerate(arms):
+        a["n"] = i
 
     # ---- pieces of each arm (text only), for the plan and the estimate
     loaded = [i for i in range(1, 10) if pictures[i - 1] is not None]
@@ -390,6 +399,8 @@ def run_royale(clip, vae, audio_vae, prompt, storyboard, arms_text, base, shots,
     plan = (f"{len(arms)} arms, {takes_total} takes, {len(chains)} model chain(s). Rough ceiling ~{_hms(est_total)} "
             f"({'from ' + str(k_n) + ' earlier takes here' if k_n else 'from the October bench numbers; it tunes itself after the first run'}; "
             f"pieces two arms share render once, so the real time is usually less).\n" + "\n".join(rows))
+    for x in skipped:
+        plan += "\n  left out: " + x
     if slots:
         plan += "\n  slots: " + "; ".join(f"{{{s}}} = {v or '(empty)'}" for s, v in sorted(slots.items()))
     print(f"{TAG} {plan}")
