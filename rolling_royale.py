@@ -24,6 +24,7 @@ What a line can change
   shot seconds = 7        bridge seconds = 3        hold = 5 | 22
   upscale = on | off      upscale mp = 1.5     upscale steps = 2     upscale denoise = 0.4
   pictures = match | max
+  keystone = on | off                     (shot 1's first frame locked into frame 0 of every later shot)
   seeds = 3                               (this arm's own number of seeds)
   a = some words                          (what goes where {a} is in the prompt or storyboard; b, c ... too)
 
@@ -200,6 +201,8 @@ def apply_change(S, key, value, unets, loras, slots):
         if value not in ("match", "max"):
             raise ValueError("pictures is match or max")
         S["ref_image_size"] = value
+    elif key == "keystone":
+        S["keystone"] = _onoff(value)
     elif key == "seeds":
         S["seeds"], S["seeds_set"] = max(1, int(value)), True
     elif re.fullmatch(r"[a-z]", key):
@@ -243,6 +246,8 @@ def diff_lines(S, base):
         out.append(f"{S['width']}x{S['height']}")
     if S["upscale"] != base["upscale"]:
         out.append("upscale on" if S["upscale"] else "upscale off")
+    if S.get("keystone", False) != base.get("keystone", False):
+        out.append("keystone on" if S.get("keystone") else "keystone off")
     for k in sorted(S["slots"]):
         if S["slots"][k] != base["slots"].get(k, ""):
             out.append(f"{{{k}}}: {S['slots'][k] or '(empty)'}")
@@ -317,6 +322,7 @@ def run_royale(clip, vae, audio_vae, prompt, storyboard, arms_text, base, shots,
     loras = folder_paths.get_filename_list("loras")
     slots = slots_in(prompt, storyboard)
     base = copy.deepcopy(base)
+    base.setdefault("keystone", False)
     base.update({"slots": dict(slots), "slot_changed": False, "seeds_set": False})
     for i, l in enumerate(base["loras"], 1):
         if l["on"] and l["file"] in ("", "none"):
@@ -452,7 +458,8 @@ def run_royale(clip, vae, audio_vae, prompt, storyboard, arms_text, base, shots,
                         upscale_steps=S["upscale_steps"], upscale_denoise=S["upscale_denoise"],
                         frame_labels=frame_labels, pictures=pictures, ref_video=ref_video, ref_audio=ref_audio,
                         solo=solo, extra_notes=notes, hold=HOLDS[S["hold"]],
-                        piece_cache=False if a["control"] else None, stream_to=os.path.join(folder, name), report=rep)
+                        piece_cache=False if a["control"] else None, stream_to=os.path.join(folder, name), report=rep,
+                        keystone=S["keystone"])
                     del frames
                     secs = time.time() - t0
                     used = rep.get("used", {})

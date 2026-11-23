@@ -345,7 +345,11 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
                  steps, sampler_name, scheduler, seed, ref_image_size, pin_mode="mask", soundtrack="generated",
                  upscale_pass=False, upscale_megapixels=1.5, upscale_steps=2, upscale_denoise=0.4,
                  frame_labels=False, pictures=(), ref_video=None, ref_audio=None, sampler=None, sigmas=None,
-                 solo=None, extra_notes=(), hold=(PIN, 0), piece_cache=None, stream_to=None, report=None):
+                 solo=None, extra_notes=(), hold=(PIN, 0), piece_cache=None, stream_to=None, report=None,
+                 keystone=False):
+    # keystone: shot 1's first frame is written into frame 0 of every later shot and locked (roycho87's Geiru
+    # Keystone, here on fresh shots). That frame sits in the shot's run-up, so it is never shown. It gives a
+    # shot rendered on its own the place and framing of shot 1 without another reference picture.
     # piece_cache: None = lab.json's setting (on), False = render everything fresh and save nothing.
     # stream_to: write the finished video straight to this mp4 (the node then returns the small proxy).
     # report: a dict that is filled with what was made (frames, size, file, pieces, what came from the cache).
@@ -369,6 +373,7 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
     tag = "[H3 Rolling Timeline]"
     lab = _lab()
     pin_mode = lab.get("pin_mode", pin_mode)
+    keystone = bool(lab.get("keystone", keystone))
     pieces, notes = parse_timeline(timeline, prompt, beat, shot_frames, bridge_frames)
     notes = list(extra_notes) + notes
     P = len(pieces)
@@ -459,6 +464,11 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
         N = (P + 1) // 2
         starts, F = layout(pieces)
     use_still = any(p["still"] for p in pieces)
+    if keystone and pieces[0]["gi"] != 0:
+        keystone = False
+        solo_line += "; the keystone needs shot 1 and was left out of this solo run"
+    if keystone and P > 1 and not runup:
+        notes.append("keystone with no run-up: every later shot opens on shot 1's first frame, in view")
 
     upscaler, up_model = None, None
     if upscale_pass:
@@ -497,6 +507,7 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
                if runup else "")
             + (" | a frame of shot 1 is an extra picture for every later piece whose prompt says {still}"
                if use_still else "")
+            + (" | keystone: shot 1's first frame is locked into frame 0 of every later shot" if keystone and P > 1 else "")
             + (f" | upscale to {upscale_megapixels} MP with {up_model}, {upscale_steps} steps @ {upscale_denoise}"
                if upscaler else "") + "\n" + "\n".join(([f"  {solo_line}"] if solo_line else []) + rows + ["  note: " + n for n in notes]))
     print(f"{tag} {plan}")
@@ -558,12 +569,16 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
             lo += [pin_of(i), fps[i - 1][0], fps[i + 1][0]] + ([pieces[i + 1]["lead"]] if pieces[i + 1]["lead"] else [])
             if (p["hold"], p["drop"]) != (PIN, 0):
                 lo += ["hold", p["hold"], p["drop"]]
+        elif keystone and i > 0:
+            lo += ["keystone", fps[0][0]]
         lo = _fp(*lo)
         hi = None
         if upscaler:
             hi = [lo, up_parts, s_hi]
             if i % 2:
                 hi += [fps[i - 1][1], fps[i + 1][1]]
+            elif keystone and i > 0:
+                hi += [fps[0][1]]
             hi = _fp(*hi)
         fps[i] = (lo, hi)
 
@@ -637,6 +652,16 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
             ma[..., b0:b0 + k1] = 0
         return NT((v, a)), NT((mv, ma))
 
+    def keyed(samples, src):
+        """The keystone: src's first frame (its one-frame latent 0) written into this latent's frame 0 and masked 0."""
+        v, a = [t.clone() for t in samples.unbind()[:2]]
+        mv, ma = torch.ones_like(v), torch.ones_like(a)
+        v[:, :, :1] = src.unbind()[0][:, :, :1].to(v)
+        mv[:, :, :1] = 0
+        return NT((v, a)), NT((mv, ma))
+
+    first = {}
+
     def pins(cond, a_lat, a_len, b_lat, bl, bridge_audio_t, lead=0):
         """keyframe pins: the same latents passed as H3 keyframe guides; the bridge draws its own copy."""
         av, aa = a_lat.unbind()[:2]
@@ -671,7 +696,11 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
         lo = load(f_lo)
         if lo is None:
             cond, latent = enc()
-            lo = sample(cond, latent["samples"], sigmas, s_lo)
+            if keystone and i > 0:
+                start, mask = keyed(latent["samples"], first["lo"])
+                lo = sample(cond, start, sigmas, s_lo, mask)
+            else:
+                lo = sample(cond, latent["samples"], sigmas, s_lo)
             keep(f_lo, lo)
             fresh = fresh_lo = True
             _mark(f"{name(i)} sample")
@@ -680,7 +709,11 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
             hi = load(f_hi)
             if hi is None:
                 cond, latent = enc()
-                hi = sample(cond, upscale(lo), up_sigmas, s_hi)
+                if keystone and i > 0:
+                    big, mask = keyed(upscale(lo), first["hi"])
+                    hi = sample(cond, big, up_sigmas, s_hi, mask)
+                else:
+                    hi = sample(cond, upscale(lo), up_sigmas, s_hi)
                 keep(f_hi, hi)
                 fresh = True
                 _mark(f"{name(i)} upscale+polish")
@@ -832,6 +865,7 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
     # shot 1: from the pictures alone
     fingerprint(0)
     prev = render_shot(0, lambda: encode(pieces[0], None))
+    first.update(lo=prev["lo"], hi=prev["hi"])
     dec0 = decode(prev)
     still = None
     if use_still:
