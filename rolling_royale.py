@@ -44,7 +44,7 @@ import re
 import statistics
 import time
 
-from . import rolling_core, rolling_timeline
+from . import rolling_core, rolling_timeline, royale_proxy
 from . import storyboard as storyboard_mod
 
 TAG = "[H3 Rolling Royale]"
@@ -462,6 +462,10 @@ def run_royale(clip, vae, audio_vae, prompt, storyboard, arms_text, base, shots,
                         keystone=S["keystone"])
                     del frames
                     secs = time.time() - t0
+                    try:  # a small copy for the page's grid; the page falls back to the full file without it
+                        royale_proxy.make_proxy(os.path.join(folder, name))
+                    except Exception as e:
+                        print(f"{TAG} no proxy for {name}: {e}")
                     used = rep.get("used", {})
                     take.update({"status": "done", "seconds": round(secs, 1), "frames": rep.get("frames"),
                                  "width": rep.get("width"), "height": rep.get("height"), "pieces": rep.get("pieces"),

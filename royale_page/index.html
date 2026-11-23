@@ -194,7 +194,10 @@ function build() {
       let video = null;
       if (t.status === "done") {
         video = document.createElement("video");
-        video.src = `/h3royale/run/${runId}/${t.file}`; video.muted = true; video.playsInline = true; video.preload = "auto";
+        const full = `/h3royale/run/${runId}/${t.file}`;
+        video.dataset.full = full;
+        video.onerror = () => { if (video.src.includes(".proxy.")) video.src = full; };
+        video.src = full.replace(/\.mp4$/, ".proxy.mp4"); video.muted = true; video.playsInline = true; video.preload = "auto";
         video.onclick = () => pick(key);
         el.appendChild(video);
         const from = [t.rendered ? `${t.rendered} rendered` : "", t.upscaled ? `${t.upscaled} upscaled` : "", t.cached ? `${t.cached} from cache` : ""].filter(Boolean).join(", ");
@@ -247,7 +250,7 @@ function paintSel() {
   applySound();
 }
 function applySound() {
-  const ab = $("ab").classList.contains("open");
+  const ab = abOpen();
   const heard = ab ? null : (lastHeard && cells[lastHeard] ? lastHeard : sel[0]);
   for (const [k, c] of Object.entries(cells)) if (c.video) c.video.muted = k !== heard;
   const panes = [...document.querySelectorAll("#abstage video")];
@@ -262,15 +265,16 @@ function openAB() {
   sel.forEach((k, i) => {
     const pane = document.createElement("div"); pane.className = "pane " + "AB"[i] + (abFlip && i !== abShow ? " hide" : "");
     pane.innerHTML = `<div class="cap"><b>${"AB"[i]}</b> ${esc(label(k))}</div>`;
-    const v = document.createElement("video"); v.src = cells[k].video.src; v.muted = true; v.playsInline = true; v.preload = "auto"; v.dataset.ab = "1";
+    const v = document.createElement("video"); v.src = cells[k].video.dataset.full; v.muted = true; v.playsInline = true; v.preload = "auto"; v.dataset.ab = "1";
     pane.appendChild(v); stage.appendChild(pane); synced.push(v);
   });
   $("ab").classList.add("open");
   $("abmode").textContent = abFlip ? "Side by side (S)" : "Flip in place (S)";
   $("abswap").style.display = abFlip ? "" : "none";
+  for (const v of synced) if (!v.dataset.ab) v.pause();
   applySound(); seekAll(); if (clock.playing) playAll();
 }
-function closeAB() { $("ab").classList.remove("open"); synced = synced.filter((v) => !v.dataset.ab); $("abstage").innerHTML = ""; applySound(); }
+function closeAB() { $("ab").classList.remove("open"); synced = synced.filter((v) => !v.dataset.ab); $("abstage").innerHTML = ""; applySound(); seekAll(); if (clock.playing) playAll(); }
 function flip() {
   if (!$("ab").classList.contains("open")) return;
   if (!abFlip) { abFlip = true; abShow = 0; openAB(); return; }
@@ -284,8 +288,11 @@ const fps = () => (man && man.fps) || 24;
 function refTake() { const k = sel[0] && cells[sel[0]] ? sel[0] : Object.keys(cells).find((x) => cells[x].video); return k ? cells[k].take : null; }
 function total() { const ts = Object.values(cells).filter((c) => c.video).map((c) => c.take.frames || 0); return ts.length ? Math.max(...ts) / fps() : 0; }
 function targetFor(v) { const d = isFinite(v.duration) ? v.duration : 1e9; return Math.min(clock.t, Math.max(0, d - 0.5 / fps())); }
-function seekAll() { for (const v of synced) { try { v.currentTime = targetFor(v) + 0.25 / fps(); } catch (e) {} } readout(); }
-function playAll() { for (const v of synced) { v.playbackRate = clock.rate; if (clock.t < (isFinite(v.duration) ? v.duration : 1e9) - 0.05) v.play().catch(() => {}); } }
+const abOpen = () => $("ab").classList.contains("open");
+function active() { const ab = abOpen(); return synced.filter((v) => !!v.dataset.ab === ab); }
+function leader() { let best = null; for (const v of active()) if (isFinite(v.duration) && (!best || v.duration > best.duration)) best = v; return best; }
+function seekAll() { for (const v of active()) { try { v.currentTime = targetFor(v) + 0.25 / fps(); } catch (e) {} } readout(); }
+function playAll() { for (const v of active()) { v.playbackRate = clock.rate; if (clock.t < (isFinite(v.duration) ? v.duration : 1e9) - 0.05) v.play().catch(() => {}); } }
 function setPlaying(p) {
   clock.playing = p; clock.last = performance.now();
   $("play").textContent = p ? "Pause" : "Play";
@@ -293,13 +300,18 @@ function setPlaying(p) {
 }
 function tick(now) {
   if (clock.playing) {
-    clock.t += (now - clock.last) / 1000 * clock.rate; clock.last = now;
-    const T = total();
-    if (T && clock.t >= T) { clock.t = 0; seekAll(); playAll(); }
-    for (const v of synced) {
-      const want = targetFor(v);
+    const L = leader();
+    if (L && !L.seeking && L.readyState >= 2) clock.t = L.currentTime;
+    else clock.t += (now - clock.last) / 1000 * clock.rate;
+    clock.last = now;
+    const T = L ? L.duration : total();
+    if (T && (clock.t >= T - 0.03 || (L && L.ended))) { clock.t = 0; seekAll(); playAll(); }
+    for (const v of active()) {
+      if (v === L || v.seeking) continue;
+      const want = targetFor(v), off = v.currentTime - want;
       if (v.paused && want < v.duration - 0.06) v.play().catch(() => {});
-      if (!v.seeking && Math.abs(v.currentTime - want) > 0.09) v.currentTime = want;
+      if (Math.abs(off) > 0.4) v.currentTime = want;
+      else v.playbackRate = clock.rate * (off > 0.03 ? 0.9 : off < -0.03 ? 1.1 : 1);
     }
     readout();
   }
