@@ -47,6 +47,9 @@
   #scrub .seg { position:absolute; top:0; bottom:0; }
   #scrub .bridge { background:var(--bridge); }
   #scrub .held { background:var(--held); }
+  #scrub .none { background:#0b0c0e; }
+  #scrub .lbl.tagA { color:var(--accent); font-weight:700; }
+  #scrub .lbl.tagB { color:var(--b); font-weight:700; }
   #scrub .lbl { position:absolute; top:5px; font-size:11px; color:#fff9; pointer-events:none; white-space:nowrap; }
   #head { position:absolute; top:0; bottom:0; width:2px; background:#fff; pointer-events:none; }
   .keys { color:var(--dim); font-size:12px; margin-left:auto; }
@@ -320,28 +323,41 @@ function tick(now) {
 function frameOf() { return Math.floor(clock.t * fps() + 1e-6); }
 function gotoFrame(f) { const T = Math.max(0, Math.round(total() * fps()) - 1); clock.t = Math.min(T, Math.max(0, f)) / fps(); if (clock.playing) setPlaying(false); else seekAll(); }
 function step(d) { gotoFrame(frameOf() + d); }
-function pieceAt(f) { const t = refTake(); if (!t || !t.pieces) return null; let hit = null; for (const p of t.pieces) if (f >= p.start && f < p.start + p.frames) hit = p; return hit; }
+function lanes() {
+  const ks = sel.filter((k) => cells[k] && cells[k].video);
+  if (!ks.length) { const t = refTake(); return t ? [{ tag: "", take: t }] : []; }
+  return ks.map((k, i) => ({ tag: ks.length > 1 ? "AB"[i] : "", take: cells[k].take }));
+}
+function pieceAt(t, f) { if (!t || !t.pieces) return null; let hit = null; for (const p of t.pieces) if (f >= p.start && f < p.start + p.frames) hit = p; return hit; }
 function readout() {
-  const f = frameOf(), p = pieceAt(f);
-  $("readout").textContent = `${clock.t.toFixed(2)}s  frame ${f}` + (p ? `  ${p.name} +${f - p.start}` : "");
+  const f = frameOf();
+  const where = lanes().map((l) => { const p = pieceAt(l.take, f); return (l.tag ? l.tag + ": " : "") + (p ? `${p.name} +${f - p.start}` : "ended"); }).join("   ");
+  $("readout").textContent = `${clock.t.toFixed(2)}s  frame ${f}   ${where}`;
   const T = total(); $("head").style.left = (T ? clock.t / T * 100 : 0) + "%";
 }
 function joins() {
-  const t = refTake(); if (!t || !t.pieces) return [];
   const out = new Set();
-  for (const p of t.pieces) if (p.kind === "bridge") { const h = p.hold || 5; [p.start, p.start + h, p.start + p.frames - h, p.start + p.frames].forEach((x) => out.add(x)); }
+  for (const l of lanes()) for (const p of (l.take.pieces || [])) if (p.kind === "bridge") { const h = p.hold || 5; [p.start, p.start + h, p.start + p.frames - h, p.start + p.frames].forEach((x) => out.add(x)); }
   return [...out].sort((a, b) => a - b);
 }
 function seam(d) { const f = frameOf(), js = joins(); const nx = d > 0 ? js.find((x) => x > f) : [...js].reverse().find((x) => x < f); if (nx !== undefined) gotoFrame(nx); }
 
 function drawScrub() {
   const s = $("scrub"); s.querySelectorAll(".seg,.lbl").forEach((e) => e.remove());
-  const t = refTake(), T = Math.round(total() * fps()); if (!t || !t.pieces || !T) return;
-  const add = (cls, a, b) => { const e = document.createElement("div"); e.className = "seg " + cls; e.style.left = a / T * 100 + "%"; e.style.width = (b - a) / T * 100 + "%"; s.insertBefore(e, $("head")); };
-  for (const p of t.pieces) {
-    if (p.kind === "bridge") { const h = p.hold || 5; add("bridge", p.start, p.start + p.frames); add("held", p.start, p.start + h); add("held", p.start + p.frames - h, p.start + p.frames); }
-    const l = document.createElement("div"); l.className = "lbl"; l.textContent = p.name; l.style.left = `calc(${(p.start + (p.kind === "bridge" ? (p.hold || 5) : 0)) / T * 100}% + 4px)`; s.insertBefore(l, $("head"));
-  }
+  const ls = lanes(), T = Math.round(total() * fps()); if (!ls.length || !T) return;
+  const n = ls.length, hgt = 100 / n;
+  s.style.height = (n > 1 ? 44 : 26) + "px";
+  ls.forEach((lane, i) => {
+    const t = lane.take; if (!t.pieces) return;
+    const add = (cls, a, b) => { const e = document.createElement("div"); e.className = "seg " + cls; e.style.left = a / T * 100 + "%"; e.style.width = Math.max(0, b - a) / T * 100 + "%"; e.style.top = i * hgt + "%"; e.style.bottom = "auto"; e.style.height = `calc(${hgt}% - ${n > 1 ? 1 : 0}px)`; s.insertBefore(e, $("head")); };
+    for (const p of t.pieces) {
+      if (p.kind === "bridge") { const h = p.hold || 5; add("bridge", p.start, p.start + p.frames); add("held", p.start, p.start + h); add("held", p.start + p.frames - h, p.start + p.frames); }
+      const l = document.createElement("div"); l.className = "lbl"; l.textContent = p.name; l.style.top = `calc(${i * hgt}% + ${n > 1 ? 3 : 5}px)`;
+      l.style.left = `calc(${(p.start + (p.kind === "bridge" ? (p.hold || 5) : 0)) / T * 100}% + 4px)`; s.insertBefore(l, $("head"));
+    }
+    if (t.frames < T) add("none", t.frames, T);
+    if (lane.tag) { const l = document.createElement("div"); l.className = "lbl tag" + lane.tag; l.textContent = lane.tag; l.style.top = `calc(${i * hgt}% + 3px)`; l.style.right = "4px"; s.insertBefore(l, $("head")); }
+  });
 }
 
 // ------------------------------------------------------------ wiring
