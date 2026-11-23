@@ -9,6 +9,7 @@ import folder_paths
 from . import rolling_core, rolling_royale, rolling_timeline
 
 VIDEO_EXTS = (".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v")
+IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff")
 
 DEFAULT_PROMPT = """subject_definitions:
 <Subject 1> is a cat whose appearance comes from <Picture 1>. Her position, posture, actions, and timing come from the skateboarder in <Video 1>.
@@ -41,6 +42,57 @@ def _video_files():
             if f.lower().endswith(VIDEO_EXTS):
                 found.append(os.path.relpath(os.path.join(dirpath, f), root).replace("\\", "/"))
     return sorted(found)
+
+
+def _image_files():
+    """Every picture in the input folder, subfolders included (cast/zara.png)."""
+    root = folder_paths.get_input_directory()
+    found = []
+    for dirpath, _, files in os.walk(root):
+        for f in files:
+            if f.lower().endswith(IMAGE_EXTS):
+                found.append(os.path.relpath(os.path.join(dirpath, f), root).replace("\\", "/"))
+    return sorted(found)
+
+
+class H3RollingPicture:
+    """A picture slot that can be left empty. 'none' hands nothing on, so the node it feeds treats the slot as
+    not plugged in; core Load Image always needs a file and stops the run without one."""
+
+    CATEGORY = "MiniMax H3/rolling"
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("image",)
+    FUNCTION = "load"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {
+            "image": (["none"] + _image_files(), {"default": "none", "image_upload": True,
+                                                  "tooltip": "none = this slot is empty and is ignored. Pictures in subfolders of the input folder are listed too."}),
+        }}
+
+    @classmethod
+    def IS_CHANGED(cls, image):
+        if not image or image == "none":
+            return "none"
+        try:
+            return f"{image}|{os.path.getmtime(folder_paths.get_annotated_filepath(image))}"
+        except Exception:
+            return image
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, image):
+        if not image or image == "none":
+            return True
+        if not folder_paths.exists_annotated_filepath(image):
+            return f"Picture not found in the input folder: {image}"
+        return True
+
+    def load(self, image):
+        if not image or image == "none":
+            return (None,)
+        import nodes
+        return (nodes.LoadImage().load_image(image)[0],)
 
 
 class H3RollingSource:
@@ -404,12 +456,14 @@ class H3RollingRoyale:
 
 NODE_CLASS_MAPPINGS = {
     "H3RollingSource": H3RollingSource,
+    "H3RollingPicture": H3RollingPicture,
     "H3RollingRef2VA": H3RollingRef2VA,
     "H3RollingTimeline": H3RollingTimeline,
     "H3RollingRoyale": H3RollingRoyale,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "H3RollingSource": "H3 Rolling Source (scrub)",
+    "H3RollingPicture": "H3 Rolling Picture (may be empty)",
     "H3RollingRef2VA": "H3 Rolling Ref2VA",
     "H3RollingTimeline": "H3 Rolling Timeline (shots + bridges)",
     "H3RollingRoyale": "H3 Rolling Royale (compare settings)",
