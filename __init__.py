@@ -199,6 +199,8 @@ The node then writes the subject_definitions and retention_analysis lines for ea
 <Picture N> typed by hand always means picture_N. JSON (a list of pieces) is still accepted here."""
 
 
+KEYSTONE_TIP = ("Shot 1's first frame is locked into the hidden first frame of every later shot, so each shot starts from shot 1's place, framing and pose without another reference picture (roycho87's Geiru Keystone, here on shots rendered on their own). It keeps the place the same from shot to shot. Every later shot opens close to how shot 1 opened, so it suits a scene that stays in one spot; a scene that moves on gets pulled back. The locked frame is inside the run-up and is never shown.")
+
 BRIDGE_HOLDS = {
     "5 frames": (5, 0),
     "22 frames": (22, 17),
@@ -255,6 +257,7 @@ class H3RollingTimeline:
                                              "tooltip": "Burn in which piece and which frame of it every frame is, plus the frame number and time. For review."}),
                 "bridge_hold": (list(BRIDGE_HOLDS), {"default": "5 frames",
                                                      "tooltip": "How much of its two neighbours a bridge holds. 5 frames: the last 5 of the shot before and 5 of the shot after. Good for short storyboard transitions. 22 frames: 22 at each end, which gives H3 about a second of real motion to match, so pace carries across the join. The bridge starts 17 frames before the shot's end and draws that ending itself, because the end of a clip tends to go stiff. This is roycho87's Geiru Context 39 / drop_last 17 with Geiru Anchoring 39 / drop_first 17. With 22, shots and bridges need to be about 3 seconds or longer. One bridge can override this with 'hold 5' or 'hold 22' on its storyboard line."}),
+                "keystone": ("BOOLEAN", {"default": False, "tooltip": KEYSTONE_TIP}),
             },
             "optional": optional,
         }
@@ -262,7 +265,7 @@ class H3RollingTimeline:
     def run(self, model, clip, vae, audio_vae, prompt, storyboard="", shots=1, shot_seconds=5.0, bridge_seconds=5.0,
             width=864, height=480, seed=0, ref_image_size="max", soundtrack="generated",
             upscale_pass=False, upscale_megapixels=1.5, upscale_steps=2, upscale_denoise=0.4, frame_labels=False,
-            bridge_hold="5 frames", sampler=None, sigmas=None, ref_video=None, ref_audio=None,
+            bridge_hold="5 frames", keystone=False, sampler=None, sigmas=None, ref_video=None, ref_audio=None,
             # not on the node any more; still honoured from an API graph or lab.json
             timeline="", beat="", steps=6, sampler_name="er_sde", scheduler="beta", pin_mode="mask", **pictures):
         from . import storyboard as storyboard_mod
@@ -290,7 +293,7 @@ class H3RollingTimeline:
             upscale_megapixels=upscale_megapixels, upscale_steps=upscale_steps, upscale_denoise=upscale_denoise,
             frame_labels=frame_labels, pictures=[pictures.get(f"picture_{i}") for i in range(1, 10)],
             ref_video=ref_video, ref_audio=ref_audio, sampler=sampler, sigmas=sigmas, solo=solo, extra_notes=notes,
-            hold=BRIDGE_HOLDS.get(bridge_hold, (5, 0)))
+            hold=BRIDGE_HOLDS.get(bridge_hold, (5, 0)), keystone=keystone)
 
 
 ARMS_TIP = """The node's own settings are the baseline. Each line here is one more arm and only says what is different.
@@ -366,6 +369,7 @@ class H3RollingRoyale:
             "bridge_hold": (list(BRIDGE_HOLDS), {"default": "5 frames"}),
             "mode": (["run", "plan only"], {"default": "run",
                                             "tooltip": "plan only: list the arms, count the takes and estimate the time, render nothing."}),
+            "keystone": ("BOOLEAN", {"default": False, "tooltip": "The baseline's setting; an arm can say keystone = on / off. " + KEYSTONE_TIP}),
         })
         optional = {f"picture_{i}": ("IMAGE", {"tooltip": f"image {i} in the storyboard, <Picture {i}> in the prompt"})
                     for i in range(1, 10)}
@@ -376,7 +380,7 @@ class H3RollingRoyale:
     def run(self, clip, vae, audio_vae, model, steps, sampler_name, scheduler, prompt, storyboard, arms, shots,
             shot_seconds, bridge_seconds, width, height, seed, seeds_per_arm, ref_image_size, soundtrack,
             upscale_pass, upscale_megapixels, upscale_steps, upscale_denoise, frame_labels, bridge_hold, mode,
-            ref_video=None, ref_audio=None, **kw):
+            keystone=False, ref_video=None, ref_audio=None, **kw):
         from . import storyboard as storyboard_mod
         for mod in (rolling_core, rolling_timeline, storyboard_mod, rolling_royale):
             importlib.reload(mod)
@@ -388,6 +392,7 @@ class H3RollingRoyale:
             "shot_seconds": shot_seconds, "bridge_seconds": bridge_seconds, "hold": BRIDGE_HOLDS.get(bridge_hold, (5, 0))[0],
             "upscale": upscale_pass, "upscale_mp": upscale_megapixels, "upscale_steps": upscale_steps,
             "upscale_denoise": upscale_denoise, "ref_image_size": ref_image_size, "seeds": seeds_per_arm,
+            "keystone": bool(keystone),
         }
         report, folder = rolling_royale.run_royale(
             clip, vae, audio_vae, prompt, storyboard, arms, base, shots, seed, soundtrack, frame_labels, mode,

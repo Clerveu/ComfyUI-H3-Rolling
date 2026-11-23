@@ -160,7 +160,7 @@ function settingsText(arm) {
   return [`model: ${s.model}`, `loras: ${l.join(", ") || "none"}`, `${s.steps} steps, ${s.sampler}, ${s.scheduler}`,
     `${s.width}x${s.height}, shots ${s.shot_seconds}s, bridges ${s.bridge_seconds}s, hold ${s.hold}`,
     `upscale: ${s.upscale ? `${s.upscale_mp} MP, ${s.upscale_steps} steps @ ${s.upscale_denoise}` : "off"}`,
-    `pictures: ${s.ref_image_size}`].join("\n");
+    `pictures: ${s.ref_image_size}`, `keystone: ${s.keystone ? "on" : "off"}`].join("\n");
 }
 
 function build() {
