@@ -6,7 +6,7 @@ import os
 import comfy.samplers
 import folder_paths
 
-from . import rolling_core, rolling_timeline
+from . import rolling_core, rolling_royale, rolling_timeline
 
 VIDEO_EXTS = (".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v")
 
@@ -293,14 +293,118 @@ class H3RollingTimeline:
             hold=BRIDGE_HOLDS.get(bridge_hold, (5, 0)))
 
 
+ARMS_TIP = """The node's own settings are the baseline. Each line here is one more arm and only says what is different.
+
+  hold = 22
+  lora 2 = on; lora 1 = off; steps = 8          several changes on one line:  ;
+  lora 1 strength = 0.6 | 0.8 | 1.0             a sweep, one arm per value:  |
+  cross: steps = 4 | 6; lora 1 strength = 0.8 | 1.0     two sweeps, every combination
+  a = locked-off tripod shot | (empty)          what goes where {a} is in the prompt or storyboard
+  control                                       the baseline again with the piece cache off
+  # a note
+
+Settings: model, lora N (on / off / a strength), lora N strength, lora N file, steps, sampler, scheduler,
+size (1024x576), shot seconds, bridge seconds, hold (5 / 22), upscale (on / off), upscale mp, upscale steps,
+upscale denoise, pictures (match / max), seeds, and any slot letter.
+
+{a: handheld, slight sway} in the prompt is a slot with the words the baseline uses. An arm that sets a slot runs on at least 3 seeds unless its line says seeds = N."""
+
+LORA_SLOTS = 4
+
+
+class H3RollingRoyale:
+    """One Timeline scene rendered several ways on the same seeds, for comparing settings. The widgets are
+    the baseline; the arms box lists what each other arm changes. Loads the model and LoRAs itself so arms
+    can swap them. Writes one mp4 per take and royale.json to output/h3_royale/<time>/."""
+
+    CATEGORY = "MiniMax H3/rolling"
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("report", "folder")
+    FUNCTION = "run"
+    OUTPUT_NODE = True
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        unets = folder_paths.get_filename_list("diffusion_models")
+        loras = ["none"] + folder_paths.get_filename_list("loras")
+        required = {
+            "clip": ("CLIP",),
+            "vae": ("VAE", {"tooltip": "Video VAE"}),
+            "audio_vae": ("VAE", {"tooltip": "Audio VAE"}),
+            "model": (unets, {"tooltip": "The baseline's diffusion model. The node loads it itself, so an arm can swap it."}),
+        }
+        for i in range(1, LORA_SLOTS + 1):
+            required[f"lora_{i}"] = (loras, {"default": "none"})
+            required[f"lora_{i}_strength"] = ("FLOAT", {"default": 1.0, "min": -4.0, "max": 4.0, "step": 0.05})
+            required[f"lora_{i}_on"] = ("BOOLEAN", {"default": i == 1,
+                                                    "tooltip": "Off = sitting in the slot but not used by the baseline; an arm can turn it on."})
+        required.update({
+            "steps": ("INT", {"default": 6, "min": 1, "max": 100}),
+            "sampler_name": (comfy.samplers.KSampler.SAMPLERS, {"default": "er_sde"}),
+            "scheduler": (comfy.samplers.KSampler.SCHEDULERS, {"default": "beta"}),
+            "prompt": ("STRING", {"multiline": True, "default": "",
+                                  "tooltip": "As on the Timeline node. {a}, {b} ... are slots an arm can fill; {a: some words} gives the baseline's words."}),
+            "storyboard": ("STRING", {"multiline": True, "default": "", "tooltip": STORYBOARD_TIP}),
+            "arms": ("STRING", {"multiline": True, "default": "", "tooltip": ARMS_TIP}),
+            "shots": ("INT", {"default": 1, "min": 1, "max": 500, "tooltip": "How many shots when the storyboard has no pieces in it."}),
+            "shot_seconds": ("FLOAT", {"default": 5.0, "min": 0.9, "max": 15.0, "step": 0.1}),
+            "bridge_seconds": ("FLOAT", {"default": 5.0, "min": 0.9, "max": 15.0, "step": 0.25}),
+            "width": ("INT", {"default": 864, "min": 256, "max": 2048, "step": 32}),
+            "height": ("INT", {"default": 480, "min": 256, "max": 2048, "step": 32}),
+            "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "control_after_generate": True,
+                             "tooltip": "Every arm uses this seed. With more seeds per arm, take 2 uses seed + 1000, take 3 seed + 2000."}),
+            "seeds_per_arm": ("INT", {"default": 1, "min": 1, "max": 10,
+                                      "tooltip": "How many seeds every arm is rendered on. One take per arm compares luck as much as settings."}),
+            "ref_image_size": (["match", "max"], {"default": "max"}),
+            "soundtrack": (["generated", "silent"], {"default": "generated"}),
+            "upscale_pass": ("BOOLEAN", {"default": False}),
+            "upscale_megapixels": ("FLOAT", {"default": 1.5, "min": 0.2, "max": 4.0, "step": 0.1}),
+            "upscale_steps": ("INT", {"default": 2, "min": 1, "max": 30}),
+            "upscale_denoise": ("FLOAT", {"default": 0.4, "min": 0.05, "max": 1.0, "step": 0.05}),
+            "frame_labels": ("BOOLEAN", {"default": False,
+                                         "tooltip": "Burn in which piece and which frame of it every frame is."}),
+            "bridge_hold": (list(BRIDGE_HOLDS), {"default": "5 frames"}),
+            "mode": (["run", "plan only"], {"default": "run",
+                                            "tooltip": "plan only: list the arms, count the takes and estimate the time, render nothing."}),
+        })
+        optional = {f"picture_{i}": ("IMAGE", {"tooltip": f"image {i} in the storyboard, <Picture {i}> in the prompt"})
+                    for i in range(1, 10)}
+        optional["ref_video"] = ("IMAGE", {"tooltip": "Reference video frames at 24 fps (2-15s): <Video 1> in the prompt."})
+        optional["ref_audio"] = ("AUDIO", {"tooltip": "Standalone reference audio: <Audio 1> in the prompt."})
+        return {"required": required, "optional": optional}
+
+    def run(self, clip, vae, audio_vae, model, steps, sampler_name, scheduler, prompt, storyboard, arms, shots,
+            shot_seconds, bridge_seconds, width, height, seed, seeds_per_arm, ref_image_size, soundtrack,
+            upscale_pass, upscale_megapixels, upscale_steps, upscale_denoise, frame_labels, bridge_hold, mode,
+            ref_video=None, ref_audio=None, **kw):
+        from . import storyboard as storyboard_mod
+        for mod in (rolling_core, rolling_timeline, storyboard_mod, rolling_royale):
+            importlib.reload(mod)
+        base = {
+            "model": model,
+            "loras": [{"file": kw.get(f"lora_{i}", "none"), "strength": float(kw.get(f"lora_{i}_strength", 1.0)),
+                       "on": bool(kw.get(f"lora_{i}_on", False))} for i in range(1, LORA_SLOTS + 1)],
+            "steps": steps, "sampler": sampler_name, "scheduler": scheduler, "width": width, "height": height,
+            "shot_seconds": shot_seconds, "bridge_seconds": bridge_seconds, "hold": BRIDGE_HOLDS.get(bridge_hold, (5, 0))[0],
+            "upscale": upscale_pass, "upscale_mp": upscale_megapixels, "upscale_steps": upscale_steps,
+            "upscale_denoise": upscale_denoise, "ref_image_size": ref_image_size, "seeds": seeds_per_arm,
+        }
+        report, folder = rolling_royale.run_royale(
+            clip, vae, audio_vae, prompt, storyboard, arms, base, shots, seed, soundtrack, frame_labels, mode,
+            [kw.get(f"picture_{i}") for i in range(1, 10)], ref_video=ref_video, ref_audio=ref_audio)
+        return {"ui": {"text": [report]}, "result": (report, folder)}
+
+
 NODE_CLASS_MAPPINGS = {
     "H3RollingSource": H3RollingSource,
     "H3RollingRef2VA": H3RollingRef2VA,
     "H3RollingTimeline": H3RollingTimeline,
+    "H3RollingRoyale": H3RollingRoyale,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "H3RollingSource": "H3 Rolling Source (scrub)",
     "H3RollingRef2VA": "H3 Rolling Ref2VA",
     "H3RollingTimeline": "H3 Rolling Timeline (shots + bridges)",
+    "H3RollingRoyale": "H3 Rolling Royale (compare settings)",
 }
 WEB_DIRECTORY = "./web"

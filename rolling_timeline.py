@@ -345,7 +345,10 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
                  steps, sampler_name, scheduler, seed, ref_image_size, pin_mode="mask", soundtrack="generated",
                  upscale_pass=False, upscale_megapixels=1.5, upscale_steps=2, upscale_denoise=0.4,
                  frame_labels=False, pictures=(), ref_video=None, ref_audio=None, sampler=None, sigmas=None,
-                 solo=None, extra_notes=(), hold=(PIN, 0)):
+                 solo=None, extra_notes=(), hold=(PIN, 0), piece_cache=None, stream_to=None, report=None):
+    # piece_cache: None = lab.json's setting (on), False = render everything fresh and save nothing.
+    # stream_to: write the finished video straight to this mp4 (the node then returns the small proxy).
+    # report: a dict that is filled with what was made (frames, size, file, pieces, what came from the cache).
     import sys
 
     import comfy.model_management
@@ -509,7 +512,7 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
         up_sigmas = comfy.samplers.calculate_sigmas(model_sampling, "linear_quadratic", total).cpu()[-(upscale_steps + 1):]
 
     # ---- fingerprints (see "the piece cache" above)
-    use_cache = bool(lab.get("piece_cache", True))
+    use_cache = bool(lab.get("piece_cache", True)) if piece_cache is None else bool(piece_cache)
     common = None
     if use_cache:
         try:
@@ -740,7 +743,7 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
         _mark(f"{nm} decode")
         if st["sink"] is None:
             hh, ww = imgs.shape[1], imgs.shape[2]
-            st["sink"] = FrameSink(F, (hh, ww), _stream_path(lab, F, hh, ww))
+            st["sink"] = FrameSink(F, (hh, ww), stream_to or _stream_path(lab, F, hh, ww))
             st["sr"] = sr
             st["audio"] = torch.zeros((1, wf.shape[1], round(F / FPS * sr)), dtype=torch.float32)
         seg = imgs[:max(0, min(imgs.shape[0], r["len"], F - s))]
@@ -906,4 +909,8 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
                 + (f"; from the piece cache: {', '.join(used['cached'])}" if used["cached"] else ""))
         plan += "\n  " + line
         print(f"{tag} {line}")
+    if report is not None:
+        report.update({"frames": F, "width": st["sink"].W, "height": st["sink"].H, "path": st["sink"].path, "used": used,
+                       "pieces": [{"name": name(i), "kind": p["kind"], "start": starts[i], "frames": p["frames"],
+                                   "hold": p.get("hold")} for i, p in enumerate(pieces)]})
     return frames_out, final_audio, plan

@@ -4,3 +4,4 @@ lab.json
 *.pre-*
 transcript_cache/
 piece_cache/
+royale_timing.json
