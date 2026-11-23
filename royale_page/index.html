@@ -161,7 +161,7 @@ function promptHtml(arm) {
 function settingsText(arm) {
   const s = arm.settings, l = (s.loras || []).filter((x) => x.on && x.file && x.file !== "none").map((x) => `${x.file} @ ${x.strength}`);
   return [`model: ${s.model}`, `loras: ${l.join(", ") || "none"}`, `${s.steps} steps, ${s.sampler}, ${s.scheduler}`,
-    `${s.width}x${s.height}, shots ${s.shot_seconds}s, bridges ${s.bridge_seconds}s, hold ${s.hold}`,
+    `${s.width}x${s.height}${s.exact || !s.aspect ? "" : ` (${s.aspect.split(" ")[0]}, ${s.mp} MP)`}, shots ${s.shot_seconds}s, bridges ${s.bridge_seconds}s, hold ${s.hold}`,
     `upscale: ${s.upscale ? `${s.upscale_mp} MP, ${s.upscale_steps} steps @ ${s.upscale_denoise}` : "off"}`,
     `pictures: ${s.ref_image_size}`, `keystone: ${s.keystone ? "on" : "off"}`].join("\n");
 }

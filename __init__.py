@@ -307,7 +307,7 @@ ARMS_TIP = """The node's own settings are the baseline. Each line here is one mo
   # a note
 
 Settings: model, lora N (on / off / a strength), lora N strength, lora N file, steps, sampler, scheduler,
-size (1024x576), shot seconds, bridge seconds, hold (5 / 22), upscale (on / off), upscale mp, upscale steps,
+mp (megapixels), aspect (9:16), size (an exact 1024x576), shot seconds, bridge seconds, hold (5 / 22), upscale (on / off), upscale mp, upscale steps,
 upscale denoise, pictures (match / max), seeds, and any slot letter.
 
 {a: handheld, slight sway} in the prompt is a slot with the words the baseline uses. An arm that sets a slot runs on at least 3 seeds unless its line says seeds = N."""
@@ -352,8 +352,10 @@ class H3RollingRoyale:
             "shots": ("INT", {"default": 1, "min": 1, "max": 500, "tooltip": "How many shots when the storyboard has no pieces in it."}),
             "shot_seconds": ("FLOAT", {"default": 5.0, "min": 0.9, "max": 15.0, "step": 0.1}),
             "bridge_seconds": ("FLOAT", {"default": 5.0, "min": 0.9, "max": 15.0, "step": 0.25}),
-            "width": ("INT", {"default": 864, "min": 256, "max": 2048, "step": 32}),
-            "height": ("INT", {"default": 480, "min": 256, "max": 2048, "step": 32}),
+            "aspect_ratio": (list(rolling_royale.ASPECTS), {"default": "16:9 (Widescreen)",
+                                                            "tooltip": "The shape of the picture. Same list as Seed Hunter's Video Settings."}),
+            "megapixels": ("FLOAT", {"default": 0.4, "min": 0.1, "max": 4.0, "step": 0.1, "display": "slider",
+                                     "tooltip": "How big. 0.4 at 16:9 is 864x480, 0.6 is 1056x608; the plan shows the exact size. The same sum as Seed Hunter's Video Settings, snapped to 32."}),
             "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "control_after_generate": True,
                              "tooltip": "Every arm uses this seed. With more seeds per arm, take 2 uses seed + 1000, take 3 seed + 2000."}),
             "seeds_per_arm": ("INT", {"default": 1, "min": 1, "max": 10,
@@ -378,7 +380,7 @@ class H3RollingRoyale:
         return {"required": required, "optional": optional}
 
     def run(self, clip, vae, audio_vae, model, steps, sampler_name, scheduler, prompt, storyboard, arms, shots,
-            shot_seconds, bridge_seconds, width, height, seed, seeds_per_arm, ref_image_size, soundtrack,
+            shot_seconds, bridge_seconds, aspect_ratio, megapixels, seed, seeds_per_arm, ref_image_size, soundtrack,
             upscale_pass, upscale_megapixels, upscale_steps, upscale_denoise, frame_labels, bridge_hold, mode,
             keystone=False, ref_video=None, ref_audio=None, **kw):
         from . import storyboard as storyboard_mod
@@ -388,7 +390,7 @@ class H3RollingRoyale:
             "model": model,
             "loras": [{"file": kw.get(f"lora_{i}", "none"), "strength": float(kw.get(f"lora_{i}_strength", 1.0)),
                        "on": bool(kw.get(f"lora_{i}_on", False))} for i in range(1, LORA_SLOTS + 1)],
-            "steps": steps, "sampler": sampler_name, "scheduler": scheduler, "width": width, "height": height,
+            "steps": steps, "sampler": sampler_name, "scheduler": scheduler, "aspect": aspect_ratio, "mp": float(megapixels),
             "shot_seconds": shot_seconds, "bridge_seconds": bridge_seconds, "hold": BRIDGE_HOLDS.get(bridge_hold, (5, 0))[0],
             "upscale": upscale_pass, "upscale_mp": upscale_megapixels, "upscale_steps": upscale_steps,
             "upscale_denoise": upscale_denoise, "ref_image_size": ref_image_size, "seeds": seeds_per_arm,

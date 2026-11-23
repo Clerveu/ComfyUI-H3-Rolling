@@ -20,7 +20,9 @@ What a line can change
   model = <name or a unique part of it>
   lora N = on | off | <strength>          lora N strength = 0.8          lora N file = <name or part>
   steps = 8        sampler = euler        scheduler = simple
-  size = 1024x576  (or width = / height =)
+  mp = 0.6                                (megapixels; the size is worked out from mp and aspect, as on the node)
+  aspect = 9:16                           (any unique part of an aspect ratio's name)
+  size = 1024x576                         (an exact size instead)
   shot seconds = 7        bridge seconds = 3        hold = 5 | 22
   upscale = on | off      upscale mp = 1.5     upscale steps = 2     upscale denoise = 0.4
   pictures = match | max
@@ -39,6 +41,7 @@ import copy
 import gc
 import itertools
 import json
+import math
 import os
 import re
 import statistics
@@ -50,6 +53,23 @@ from . import storyboard as storyboard_mod
 TAG = "[H3 Rolling Royale]"
 SLOT = re.compile(r"\{([a-z])(?::([^{}]*))?\}")
 HOLDS = {5: (5, 0), 22: (22, 17)}
+# The same list and the same sum as Comfy's own Resolution Selector (comfy_extras/nodes_resolution.py), which is
+# what Seed Hunter's Video Settings uses; sizes snap to 32 as Seed Hunter's does.
+ASPECTS = {"1:1 (Square)": (1, 1), "2:3 (Portrait Photo)": (2, 3), "3:2 (Photo)": (3, 2), "3:4 (Portrait Standard)": (3, 4),
+           "4:3 (Standard)": (4, 3), "9:16 (Portrait Widescreen)": (9, 16), "16:9 (Widescreen)": (16, 9),
+           "21:9 (Ultrawide)": (21, 9)}
+SIZE_MULTIPLE = 32
+
+
+def size_for(aspect, megapixels, multiple=SIZE_MULTIPLE):
+    wr, hr = ASPECTS[aspect]
+    scale = math.sqrt(megapixels * 1024 * 1024 / (wr * hr))
+    return max(multiple, round(wr * scale / multiple) * multiple), max(multiple, round(hr * scale / multiple) * multiple)
+
+
+def resolve_size(S):
+    """Fill in S['width'] and S['height']: the exact size if one was given, else from aspect and megapixels."""
+    S["width"], S["height"] = S["exact"] if S.get("exact") else size_for(S["aspect"], S["mp"])
 SEED_STEP = 1000      # take k of an arm uses seed + 1000 * k (Seed Hunter's spacing)
 SLOT_SEEDS = 3
 BASE_PIXELS = 864 * 480
@@ -177,9 +197,11 @@ def apply_change(S, key, value, unets, loras, slots):
         mm = re.fullmatch(r"(\d+)\s*x\s*(\d+)", value.lower())
         if not mm:
             raise ValueError("size is written 1024x576")
-        S["width"], S["height"] = int(mm.group(1)), int(mm.group(2))
-    elif key in ("width", "height"):
-        S[key] = int(value)
+        S["exact"] = [int(mm.group(1)), int(mm.group(2))]
+    elif key in ("mp", "megapixels"):
+        S["mp"], S["exact"] = float(value), None
+    elif key in ("aspect", "aspect ratio"):
+        S["aspect"], S["exact"] = _match(value, list(ASPECTS), "aspect ratio"), None
     elif key in ("shot seconds", "shot"):
         S["shot_seconds"] = float(value.rstrip("s"))
     elif key in ("bridge seconds", "bridge"):
@@ -242,8 +264,14 @@ def diff_lines(S, base):
         if S[key] != base[key]:
             unit = "s" if key.endswith("seconds") else ""
             out.append(f"{word} {S[key]:g}{unit}".strip() if isinstance(S[key], float) else f"{word} {S[key]}{unit}".strip())
-    if (S["width"], S["height"]) != (base["width"], base["height"]):
-        out.append(f"{S['width']}x{S['height']}")
+    if S.get("exact"):
+        if (S["width"], S["height"]) != (base["width"], base["height"]):
+            out.append(f"{S['width']}x{S['height']}")
+    else:
+        if S["aspect"] != base["aspect"] or base.get("exact"):
+            out.append(S["aspect"].split(" ")[0])
+        if S["mp"] != base["mp"] or base.get("exact"):
+            out.append(f"{S['mp']:g} MP ({S['width']}x{S['height']})")
     if S["upscale"] != base["upscale"]:
         out.append("upscale on" if S["upscale"] else "upscale off")
     if S.get("keystone", False) != base.get("keystone", False):
@@ -323,6 +351,10 @@ def run_royale(clip, vae, audio_vae, prompt, storyboard, arms_text, base, shots,
     slots = slots_in(prompt, storyboard)
     base = copy.deepcopy(base)
     base.setdefault("keystone", False)
+    if "aspect" not in base:  # an older caller that still hands over a width and a height
+        base.update({"aspect": "16:9 (Widescreen)", "mp": 0.4, "exact": [base.pop("width"), base.pop("height")]})
+    base.setdefault("exact", None)
+    resolve_size(base)
     base.update({"slots": dict(slots), "slot_changed": False, "seeds_set": False})
     for i, l in enumerate(base["loras"], 1):
         if l["on"] and l["file"] in ("", "none"):
@@ -337,6 +369,7 @@ def run_royale(clip, vae, audio_vae, prompt, storyboard, arms_text, base, shots,
                 apply_change(S, key, value, unets, loras, slots)
         except ValueError as e:
             raise ValueError(f"arms line {a['line']} ({a['label']}): {e}")
+        resolve_size(S)
         if S["slot_changed"] and not S["seeds_set"]:
             S["seeds"] = max(S["seeds"], SLOT_SEEDS)
         arms.append({"n": len(arms), "label": a["label"], "changes": a["changes"], "control": a["control"], "S": S})
@@ -396,7 +429,8 @@ def run_royale(clip, vae, audio_vae, prompt, storyboard, arms_text, base, shots,
         first_of.setdefault(c[0], i)
     for ch in sorted(chains, key=lambda c: (first_of[c[0]], chains.index(c))):
         order += [a for a in arms[1:] if a["chain"] == ch]
-    plan = (f"{len(arms)} arms, {takes_total} takes, {len(chains)} model chain(s). Rough ceiling ~{_hms(est_total)} "
+    plan = (f"baseline {base['width']}x{base['height']}" + ("" if base.get("exact") else f" ({base['aspect'].split(' ')[0]}, {base['mp']:g} MP)") + "\n"
+            f"{len(arms)} arms, {takes_total} takes, {len(chains)} model chain(s). Rough ceiling ~{_hms(est_total)} "
             f"({'from ' + str(k_n) + ' earlier takes here' if k_n else 'from the October bench numbers; it tunes itself after the first run'}; "
             f"pieces two arms share render once, so the real time is usually less).\n" + "\n".join(rows))
     for x in skipped:
