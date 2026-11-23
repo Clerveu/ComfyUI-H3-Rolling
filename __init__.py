@@ -55,8 +55,33 @@ def _image_files():
     return sorted(found)
 
 
+EMPTY_PICTURE = "(empty).png"
+
+
+def _ensure_empty_picture():
+    """The empty slot is a real file in the input folder, so the picture widget has something to show
+    instead of 'Image failed to load'. The node never loads it."""
+    path = os.path.join(folder_paths.get_input_directory(), EMPTY_PICTURE)
+    if os.path.exists(path):
+        return
+    try:
+        from PIL import Image, ImageDraw
+        im = Image.new("RGB", (512, 512), (21, 23, 28))
+        d = ImageDraw.Draw(im)
+        d.rectangle([24, 24, 487, 487], outline=(58, 63, 75), width=3)
+        d.line([24, 24, 487, 487], fill=(40, 44, 54), width=2)
+        d.line([24, 487, 487, 24], fill=(40, 44, 54), width=2)
+        im.save(path)
+    except Exception as e:
+        print(f"[H3 Rolling] couldn't write {EMPTY_PICTURE}: {e}")
+
+
+def _is_empty(image):
+    return not image or image in ("none", EMPTY_PICTURE)
+
+
 class H3RollingPicture:
-    """A picture slot that can be left empty. 'none' hands nothing on, so the node it feeds treats the slot as
+    """A picture slot that can be left empty. '(empty).png' hands nothing on, so the node it feeds treats the slot as
     not plugged in; core Load Image always needs a file and stops the run without one."""
 
     CATEGORY = "MiniMax H3/rolling"
@@ -67,13 +92,14 @@ class H3RollingPicture:
     @classmethod
     def INPUT_TYPES(cls):
         return {"required": {
-            "image": (["none"] + _image_files(), {"default": "none", "image_upload": True,
-                                                  "tooltip": "none = this slot is empty and is ignored. Pictures in subfolders of the input folder are listed too."}),
+            "image": ([EMPTY_PICTURE] + [f for f in _image_files() if f != EMPTY_PICTURE],
+                      {"default": EMPTY_PICTURE, "image_upload": True,
+                       "tooltip": "(empty).png = this slot is empty and is ignored. Pictures in subfolders of the input folder are listed too."}),
         }}
 
     @classmethod
     def IS_CHANGED(cls, image):
-        if not image or image == "none":
+        if _is_empty(image):
             return "none"
         try:
             return f"{image}|{os.path.getmtime(folder_paths.get_annotated_filepath(image))}"
@@ -82,14 +108,14 @@ class H3RollingPicture:
 
     @classmethod
     def VALIDATE_INPUTS(cls, image):
-        if not image or image == "none":
+        if _is_empty(image):
             return True
         if not folder_paths.exists_annotated_filepath(image):
             return f"Picture not found in the input folder: {image}"
         return True
 
     def load(self, image):
-        if not image or image == "none":
+        if _is_empty(image):
             return (None,)
         import nodes
         return (nodes.LoadImage().load_image(image)[0],)
@@ -469,6 +495,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "H3RollingRoyale": "H3 Rolling Royale (compare settings)",
 }
 WEB_DIRECTORY = "./web"
+
+_ensure_empty_picture()
 
 # The Royale results page: http://<this Comfy>:8188/h3royale
 try:

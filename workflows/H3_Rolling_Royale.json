@@ -107,7 +107,7 @@
   },
   {
    "id": 6,
-   "type": "LoadImage",
+   "type": "H3RollingPicture",
    "pos": [
     460,
     0
@@ -122,32 +122,26 @@
    "inputs": [],
    "outputs": [
     {
-     "name": "IMAGE",
+     "name": "image",
      "type": "IMAGE",
      "links": [
       4
      ],
      "slot_index": 0
-    },
-    {
-     "name": "MASK",
-     "type": "MASK",
-     "links": [],
-     "slot_index": 1
     }
    ],
    "properties": {
-    "Node name for S&R": "LoadImage"
+    "Node name for S&R": "H3RollingPicture"
    },
    "widgets_values": [
-    "",
+    "none",
     "image"
    ],
    "title": "image 1: the person"
   },
   {
    "id": 7,
-   "type": "LoadImage",
+   "type": "H3RollingPicture",
    "pos": [
     720,
     0
@@ -162,32 +156,26 @@
    "inputs": [],
    "outputs": [
     {
-     "name": "IMAGE",
+     "name": "image",
      "type": "IMAGE",
      "links": [
       5
      ],
      "slot_index": 0
-    },
-    {
-     "name": "MASK",
-     "type": "MASK",
-     "links": [],
-     "slot_index": 1
     }
    ],
    "properties": {
-    "Node name for S&R": "LoadImage"
+    "Node name for S&R": "H3RollingPicture"
    },
    "widgets_values": [
-    "",
+    "none",
     "image"
    ],
    "title": "image 2: the room"
   },
   {
    "id": 8,
-   "type": "LoadImage",
+   "type": "H3RollingPicture",
    "pos": [
     980,
     0
@@ -202,32 +190,26 @@
    "inputs": [],
    "outputs": [
     {
-     "name": "IMAGE",
+     "name": "image",
      "type": "IMAGE",
      "links": [
       6
      ],
      "slot_index": 0
-    },
-    {
-     "name": "MASK",
-     "type": "MASK",
-     "links": [],
-     "slot_index": 1
     }
    ],
    "properties": {
-    "Node name for S&R": "LoadImage"
+    "Node name for S&R": "H3RollingPicture"
    },
    "widgets_values": [
-    "",
+    "none",
     "image"
    ],
    "title": "image 3: the room, changed"
   },
   {
    "id": 9,
-   "type": "LoadImage",
+   "type": "H3RollingPicture",
    "pos": [
     1240,
     0
@@ -242,25 +224,19 @@
    "inputs": [],
    "outputs": [
     {
-     "name": "IMAGE",
+     "name": "image",
      "type": "IMAGE",
      "links": [
       7
      ],
      "slot_index": 0
-    },
-    {
-     "name": "MASK",
-     "type": "MASK",
-     "links": [],
-     "slot_index": 1
     }
    ],
    "properties": {
-    "Node name for S&R": "LoadImage"
+    "Node name for S&R": "H3RollingPicture"
    },
    "widgets_values": [
-    "",
+    "none",
     "image"
    ],
    "title": "image 4: the room, changed again"
