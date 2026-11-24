@@ -4,8 +4,12 @@
   GET  /h3royale/runs                 every run folder in output/h3_royale, newest first
   GET  /h3royale/run/<id>/<file>      royale.json, votes.json or a take's mp4 (range requests work, so video seeks)
   POST /h3royale/run/<id>/votes       saves the thumbs and comments as votes.json in the run folder
+  POST /h3royale/run/<id>/queue       {arm, take, what: upscale|royale, arms, mode: run|plan}: builds a job from
+                                      the run's job.json with that take as the baseline (royale_jobs.py) and
+                                      puts it in Comfy's queue
 """
 import asyncio
+import importlib
 import json
 import os
 import re
@@ -54,6 +58,7 @@ def register(routes):
                 continue
             takes = [t for a in m.get("arms", []) for t in a.get("takes", [])]
             out.append({"id": rid, "status": m.get("status"), "arms": len(m.get("arms", [])), "takes": len(takes),
+                        "origin": m.get("origin"),
                         "done": sum(t.get("status") == "done" for t in takes),
                         "what": "; ".join(" | ".join(a.get("diff") or []) for a in m.get("arms", [])[1:])[:160]})
         return web.json_response(out, headers={"Cache-Control": "no-store"})
@@ -83,6 +88,51 @@ def register(routes):
                 raise web.HTTPServiceUnavailable()
             return web.Response(body=data, content_type="application/json", headers={"Cache-Control": "no-store"})
         return web.FileResponse(path)
+
+    @routes.post("/h3royale/run/{run}/queue")
+    async def queue(request):
+        import aiohttp
+
+        from . import royale_jobs
+        importlib.reload(royale_jobs)
+        d = _run_dir(request)
+
+        def fail(msg, status=400):
+            return web.json_response({"error": msg}, status=status)
+        try:
+            body = await request.json()
+            with open(os.path.join(d, "royale.json"), "rb") as f:
+                man = json.loads(f.read())
+        except (OSError, ValueError):
+            return fail("couldn't read the request or this run's royale.json")
+        try:
+            with open(os.path.join(d, "job.json"), "rb") as f:
+                job = json.loads(f.read())
+        except (OSError, ValueError):
+            return fail("This run has no saved job, so a new render can't be started from it. Runs made from now on have one.", 409)
+        try:
+            graph, extra = royale_jobs.build_job(job, man, int(body.get("arm", -1)), int(body.get("take", -1)),
+                                                 body.get("what"), body.get("arms", ""), body.get("mode", "run"))
+        except (ValueError, KeyError, TypeError) as e:
+            return fail(str(e))
+        url = f"http://127.0.0.1:{request.url.port or 8188}/prompt"
+        try:
+            async with aiohttp.ClientSession() as s:
+                async with s.post(url, json={"prompt": graph, "client_id": "h3royale",
+                                             "extra_data": {"extra_pnginfo": extra}}) as r:
+                    data = await r.json(content_type=None)
+                    if r.status != 200:
+                        err = data.get("error") if isinstance(data, dict) else None
+                        msg = (err.get("message") if isinstance(err, dict) else str(err or data))[:400]
+                        nodes_err = data.get("node_errors") if isinstance(data, dict) else None
+                        if nodes_err:
+                            msg += " | " + "; ".join(f"{k}: " + ", ".join(e.get("details", e.get("message", "")) for e in v.get("errors", []))
+                                                     for k, v in nodes_err.items())[:600]
+                        return fail("Comfy didn't take the job: " + msg)
+        except aiohttp.ClientError as e:
+            return fail(f"couldn't reach Comfy's queue: {e}", 502)
+        return web.json_response({"ok": True, "prompt_id": data.get("prompt_id"), "number": data.get("number"),
+                                  "node_id": str(job["node_id"])})
 
     @routes.post("/h3royale/run/{run}/votes")
     async def votes(request):

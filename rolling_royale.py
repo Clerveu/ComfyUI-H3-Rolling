@@ -358,7 +358,7 @@ def _write(path, data, patience=6.0):
 
 
 def run_royale(clip, vae, audio_vae, prompt, storyboard, arms_text, base, shots, seed, soundtrack, frame_labels,
-               mode, pictures, ref_video=None, ref_audio=None):
+               mode, pictures, ref_video=None, ref_audio=None, job=None, origin=None):
     import comfy.model_management as mm
     import folder_paths
     import nodes
@@ -469,6 +469,14 @@ def run_royale(clip, vae, audio_vae, prompt, storyboard, arms_text, base, shots,
                      "settings": {kk: v for kk, v in a["S"].items() if kk not in ("slot_changed", "seeds_set")},
                      "takes": [{"seed": seed + SEED_STEP * t, "status": "waiting"} for t in range(a["S"]["seeds"])]}
                     for a in arms]}
+    if origin:
+        man["origin"] = origin
+    if job:  # the job as queued, so the results page can start a new run from one of these takes
+        try:
+            with open(os.path.join(folder, "job.json"), "w", encoding="utf-8") as f:
+                json.dump(dict(job, saved=time.time()), f)
+        except (OSError, TypeError, ValueError) as e:
+            print(f"{TAG} couldn't save the job ({e}); this run can't be upscaled from the page")
     mpath = os.path.join(folder, "royale.json")
     _write(mpath, man)
 

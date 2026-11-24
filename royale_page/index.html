@@ -63,6 +63,18 @@
   #abstage video { flex:1; min-height:0; width:100%; object-fit:contain; background:#000; border-radius:6px; }
   #abstage.flip .pane { position:absolute; inset:0; }
   #abstage.flip .pane.hide { visibility:hidden; }
+  .cell .meta button.act { opacity:.8; font-size:11px; padding:1px 6px; }
+  .cell .meta button.act:hover { opacity:1; border-color:var(--accent); }
+  #origin a, #queued a { color:var(--accent); cursor:pointer; text-decoration:underline; }
+  #queued { color:var(--good); }
+  #queued.err { color:var(--bad); }
+  #rf { position:fixed; left:50%; top:12%; transform:translateX(-50%); width:min(760px, 92vw); max-height:70vh; overflow:auto; background:var(--panel);
+        border:1px solid var(--line); border-radius:10px; padding:14px 16px; z-index:40; display:none; box-shadow:0 10px 40px #000a; }
+  #rf.open { display:block; }
+  #rf h2 { font-size:15px; margin:0 0 4px; } #rf .src { color:var(--dim); font-size:12px; margin-bottom:8px; }
+  #rf textarea { width:100%; height:120px; font:13px ui-monospace, Consolas, monospace; color:var(--text); background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:8px; }
+  #rf pre { white-space:pre-wrap; font-size:12px; background:var(--bg); border-radius:6px; padding:8px; max-height:240px; overflow:auto; margin:8px 0 0; }
+  #rf .row { display:flex; gap:8px; align-items:center; margin-top:8px; } #rf .hint { color:var(--dim); font-size:12px; }
   .legend { font-size:12px; color:var(--dim); display:flex; gap:10px; align-items:center; }
   .sw { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:3px; vertical-align:-1px; }
 </style>
@@ -74,6 +86,8 @@
   <button id="reload" title="Reload the run list">Reload</button>
   <label class="legend">size <input id="size" type="range" min="180" max="900" step="20" value="320"></label>
   <span id="status"></span>
+  <span id="origin" class="legend"></span>
+  <span id="queued"></span>
 </header>
 <div id="gridwrap"><table id="grid"></table></div>
 
@@ -85,6 +99,15 @@
     <button id="abclose" style="margin-left:auto">Close (Esc)</button>
   </div>
   <div id="abstage"></div>
+</div>
+
+<div id="rf">
+  <h2>Royale from this take</h2>
+  <div class="src" id="rfsrc"></div>
+  <textarea id="rfarms" placeholder="one arm per line, only what differs from this take, e.g.&#10;hold = 22&#10;lora 2 strength = 0.4 | 0.6&#10;upscale = on"></textarea>
+  <div class="row"><button id="rfplan">Plan</button><button id="rfrun">Run</button><button id="rfclose">Cancel</button>
+    <span class="hint">This take is arm 0 of the new run and comes from the cache. Plan lists the arms and the time without rendering.</span></div>
+  <pre id="rfout" style="display:none"></pre>
 </div>
 
 <div id="bar">
@@ -115,6 +138,7 @@ let synced = [];           // every video element following the clock
 let sel = [];              // up to two keys: [A, B]
 let clock = { t: 0, playing: false, last: 0, rate: 1 };
 let abFlip = false, abShow = 0;
+let hasJob = false, rfTarget = null, watchTimer = null;
 
 // ------------------------------------------------------------ data
 async function loadRuns(keep) {
@@ -131,6 +155,8 @@ async function openRun(id) {
   runId = id; sel = []; cells = {}; synced = []; clock.t = 0; setPlaying(false);
   history.replaceState(null, "", "?run=" + id);
   votes = await (await fetch(`/h3royale/run/${id}/votes.json`)).json().catch(() => ({}));
+  hasJob = await fetch(`/h3royale/run/${id}/job.json`).then((r) => r.ok).catch(() => false);
+  closeRF();
   man = null;
   await refresh(true);
 }
@@ -145,6 +171,8 @@ async function refresh(first) {
   const takes = m.arms.flatMap((a) => a.takes), done = takes.filter((t) => t.status === "done").length;
   const secs = takes.reduce((s, t) => s + (t.seconds || 0), 0);
   $("status").textContent = `${m.status} - ${done}/${takes.length} takes - ${fmt(secs)} of rendering - seed ${m.seed}`;
+  const o = m.origin, og = $("origin"); og.textContent = "";
+  if (o) { og.append(`${o.what} of `); const a = document.createElement("a"); a.textContent = `${o.run.replace("_", " ")} arm ${o.arm}`; a.title = o.label; a.onclick = () => { $("runs").value = o.run; openRun(o.run); }; og.append(a, ` (${o.label}, seed ${o.seed})`); }
   clearTimeout(pollTimer);
   if (m.status === "running") pollTimer = setTimeout(() => refresh(false), 3000);
 }
@@ -206,7 +234,9 @@ function build() {
         const from = [t.rendered ? `${t.rendered} rendered` : "", t.upscaled ? `${t.upscaled} upscaled` : "", t.cached ? `${t.cached} from cache` : ""].filter(Boolean).join(", ");
         const meta = document.createElement("div"); meta.className = "meta";
         meta.innerHTML = `<span class="tag"></span><span title="${esc(from)}">${fmt(t.seconds)}${t.cached || t.upscaled ? "*" : ""}</span>
-          <button class="up" title="Good">&#128077;</button><button class="down" title="Bad">&#128078;</button><input placeholder="note">`;
+          <button class="up" title="Good">&#128077;</button><button class="down" title="Bad">&#128078;</button><input placeholder="note">`
+          + (hasJob ? (a.settings.upscale ? "" : `<button class="act upb" title="Render this take again with the upscale pass, as a new run next to a copy of this one">Upscale</button>`)
+            + `<button class="act royb" title="Start a new run with this take as the baseline">Royale</button>` : "");
         const [up, down] = meta.querySelectorAll("button"), note = meta.querySelector("input");
         const v = votes[key] || {};
         up.classList.toggle("on", v.vote === "up"); down.classList.toggle("on", v.vote === "down"); note.value = v.note || "";
@@ -215,6 +245,10 @@ function build() {
         up.onclick = () => set("up"); down.onclick = () => set("down");
         note.oninput = () => { votes[key] = { ...(votes[key] || {}), note: note.value, label: a.n === 0 ? "baseline" : (a.diff || []).join(" | "), seed: t.seed }; saveVotes(); };
         note.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter" || e.key === "Escape") note.blur(); };
+        const tgt = { arm: a.n, take: r, label: `arm ${a.n}: ${a.n === 0 ? "baseline" : (a.diff || []).join(" | ")} - seed ${t.seed}` };
+        const upb = meta.querySelector(".upb"), royb = meta.querySelector(".royb");
+        if (upb) upb.onclick = () => { if (confirm(`Upscale ${tgt.label}?\n\nIt goes into Comfy's queue and shows up as a new run: this take, and the same take upscaled.`)) queueJob({ ...tgt, what: "upscale" }); };
+        if (royb) royb.onclick = () => openRF(tgt);
         el.appendChild(meta);
         synced.push(video);
       } else {
@@ -284,6 +318,59 @@ function flip() {
   abShow = 1 - abShow;
   document.querySelectorAll("#abstage .pane").forEach((p, i) => p.classList.toggle("hide", i !== abShow));
   applySound();
+}
+
+// ------------------------------------------------------------ starting a new run from a take
+function say(msg, err) { const q = $("queued"); q.className = err ? "err" : ""; q.textContent = msg; }
+async function postQueue(body) {
+  const r = await fetch(`/h3royale/run/${runId}/queue`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const d = await r.json().catch(() => ({ error: "the server sent something that wasn't an answer" }));
+  if (!r.ok || d.error) throw new Error(d.error || `the server said ${r.status}`);
+  return d;
+}
+async function queueJob(tgt) {
+  try {
+    const before = new Set([...$("runs").options].map((o) => o.value));
+    await postQueue({ arm: tgt.arm, take: tgt.take, what: tgt.what, arms: tgt.arms || "", mode: "run" });
+    say(`Queued: ${tgt.what} of ${tgt.label}. It appears here as a new run when Comfy starts it.`);
+    watchForRun(before);
+    return true;
+  } catch (e) { say(e.message, true); return false; }
+}
+function watchForRun(before) {
+  clearInterval(watchTimer);
+  let tries = 0;
+  watchTimer = setInterval(async () => {
+    tries++;
+    const runs = await (await fetch("/h3royale/runs")).json().catch(() => []);
+    const fresh = runs.find((r) => !before.has(r.id) && r.origin);
+    if (fresh) {
+      clearInterval(watchTimer);
+      const keep = runId; await loadRuns(keep);
+      const q = $("queued"); q.className = ""; q.textContent = "New run started: ";
+      const a = document.createElement("a"); a.textContent = `open ${fresh.id.replace("_", " ")}`; a.onclick = () => { $("runs").value = fresh.id; openRun(fresh.id); q.textContent = ""; };
+      q.append(a);
+    } else if (tries > 2160) clearInterval(watchTimer);   // three hours of looking is enough
+  }, 5000);
+}
+function openRF(tgt) { rfTarget = tgt; $("rfsrc").textContent = "baseline: " + tgt.label; $("rfout").style.display = "none"; $("rf").classList.add("open"); $("rfarms").focus(); }
+function closeRF() { $("rf").classList.remove("open"); rfTarget = null; }
+async function planRF() {
+  const out = $("rfout"); out.style.display = ""; out.textContent = "asking Comfy for the plan...";
+  try {
+    const d = await postQueue({ arm: rfTarget.arm, take: rfTarget.take, what: "royale", arms: $("rfarms").value, mode: "plan" });
+    for (let i = 0; i < 600; i++) {   // the plan is quick, but it waits its turn behind whatever is rendering
+      await new Promise((ok) => setTimeout(ok, 1000));
+      const h = await (await fetch(`/history/${d.prompt_id}`)).json().catch(() => ({}));
+      const e = h[d.prompt_id];
+      if (!e) { if (i === 5) out.textContent = "waiting behind the render that's running; the plan shows up when Comfy gets to it..."; continue; }
+      const text = ((e.outputs || {})[d.node_id] || {}).text;
+      const errs = ((e.status || {}).messages || []).filter((m) => m[0] === "execution_error").map((m) => m[1].exception_message);
+      out.textContent = text ? text.join("\n") : (errs.join("\n") || "Comfy finished the job and sent no plan back.");
+      return;
+    }
+    out.textContent = "Still waiting after ten minutes. The plan job is in Comfy's queue.";
+  } catch (e) { out.textContent = e.message; }
 }
 
 // ------------------------------------------------------------ one clock for every player
@@ -370,6 +457,9 @@ $("play").onclick = () => setPlaying(!clock.playing);
 $("back").onclick = () => step(-1); $("fwd").onclick = () => step(1);
 $("pseam").onclick = () => seam(-1); $("nseam").onclick = () => seam(1);
 $("speed").onchange = (e) => { clock.rate = +e.target.value; for (const v of synced) v.playbackRate = clock.rate; };
+$("rfclose").onclick = closeRF; $("rfplan").onclick = planRF;
+$("rfrun").onclick = async () => { const t = rfTarget; if (t && await queueJob({ ...t, what: "royale", arms: $("rfarms").value })) closeRF(); };
+$("rfarms").onkeydown = (e) => { e.stopPropagation(); if (e.key === "Escape") closeRF(); };
 $("abopen").onclick = openAB; $("abclose").onclick = closeAB; $("abswap").onclick = flip;
 $("abmode").onclick = () => { abFlip = !abFlip; abShow = 0; openAB(); };
 let dragging = false;
@@ -378,7 +468,8 @@ $("scrub").onpointerdown = (e) => { dragging = true; $("scrub").setPointerCaptur
 $("scrub").onpointermove = (e) => { if (dragging) scrubTo(e); };
 $("scrub").onpointerup = () => { dragging = false; };
 document.onkeydown = (e) => {
-  if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+  if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT" || e.target.tagName === "TEXTAREA") return;
+  if (e.key === "Escape" && $("rf").classList.contains("open")) { closeRF(); return; }
   const k = e.key;
   if (k === " ") { e.preventDefault(); setPlaying(!clock.playing); }
   else if (k === "," || k === "ArrowLeft") step(-1);

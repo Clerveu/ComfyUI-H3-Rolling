@@ -455,12 +455,15 @@ class H3RollingRoyale:
                     for i in range(1, 10)}
         optional["ref_video"] = ("IMAGE", {"tooltip": "Reference video frames at 24 fps (2-15s): <Video 1> in the prompt."})
         optional["ref_audio"] = ("AUDIO", {"tooltip": "Standalone reference audio: <Audio 1> in the prompt."})
-        return {"required": required, "optional": optional}
+        # hidden: the whole job as queued (saved into the run folder so the results page can start a new run
+        # from one of this run's takes), this node's id in it, and what the page sent along when it did
+        return {"required": required, "optional": optional,
+                "hidden": {"job_graph": "PROMPT", "node_id": "UNIQUE_ID", "extra": "EXTRA_PNGINFO"}}
 
     def run(self, clip, vae, audio_vae, model, steps, sampler_name, scheduler, prompt, storyboard, arms, shots,
             shot_seconds, bridge_seconds, aspect_ratio, megapixels, seed, seeds_per_arm, ref_image_size, soundtrack,
             upscale_pass, upscale_megapixels, upscale_steps, upscale_denoise, frame_labels, bridge_hold, mode,
-            keystone=False, ref_video=None, ref_audio=None, **kw):
+            keystone=False, ref_video=None, ref_audio=None, job_graph=None, node_id=None, extra=None, **kw):
         from . import storyboard as storyboard_mod
         for mod in (rolling_core, rolling_timeline, storyboard_mod, rolling_royale):
             importlib.reload(mod)
@@ -474,9 +477,14 @@ class H3RollingRoyale:
             "upscale_denoise": upscale_denoise, "ref_image_size": ref_image_size, "seeds": seeds_per_arm,
             "keystone": bool(keystone),
         }
+        extra = extra if isinstance(extra, dict) else {}
+        if (extra.get("h3royale_base") or {}).get("exact"):  # a run started from a take that had an exact size
+            base["exact"] = [int(x) for x in extra["h3royale_base"]["exact"]]
+        job = {"prompt": job_graph, "node_id": str(node_id)} if job_graph and node_id is not None else None
         report, folder = rolling_royale.run_royale(
             clip, vae, audio_vae, prompt, storyboard, arms, base, shots, seed, soundtrack, frame_labels, mode,
-            [kw.get(f"picture_{i}") for i in range(1, 10)], ref_video=ref_video, ref_audio=ref_audio)
+            [kw.get(f"picture_{i}") for i in range(1, 10)], ref_video=ref_video, ref_audio=ref_audio,
+            job=job, origin=extra.get("h3royale_origin"))
         return {"ui": {"text": [report]}, "result": (report, folder)}
 
 
