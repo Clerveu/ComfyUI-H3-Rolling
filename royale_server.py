@@ -5,6 +5,7 @@
   GET  /h3royale/run/<id>/<file>      royale.json, votes.json or a take's mp4 (range requests work, so video seeks)
   POST /h3royale/run/<id>/votes       saves the thumbs and comments as votes.json in the run folder
 """
+import asyncio
 import json
 import os
 import re
@@ -46,8 +47,9 @@ def register(routes):
             if not RUN_ID.match(rid):
                 continue
             try:
-                with open(os.path.join(root, rid, "royale.json"), encoding="utf-8") as f:
-                    m = json.load(f)
+                with open(os.path.join(root, rid, "royale.json"), "rb") as f:
+                    raw = f.read()
+                m = json.loads(raw)
             except (OSError, ValueError):
                 continue
             takes = [t for a in m.get("arms", []) for t in a.get("takes", [])]
@@ -66,8 +68,21 @@ def register(routes):
             if name == "votes.json":
                 return web.json_response({})
             raise web.HTTPNotFound()
-        headers = {"Cache-Control": "no-store"} if name.endswith(".json") else {}
-        return web.FileResponse(path, headers=headers)
+        if name.endswith(".json"):
+            # read it and let go at once: a run rewrites royale.json after every take, and on Windows the
+            # rewrite can't happen while this file is open
+            data = None
+            for _ in range(20):
+                try:
+                    with open(path, "rb") as f:
+                        data = f.read()
+                    break
+                except OSError:
+                    await asyncio.sleep(0.05)
+            if data is None:
+                raise web.HTTPServiceUnavailable()
+            return web.Response(body=data, content_type="application/json", headers={"Cache-Control": "no-store"})
+        return web.FileResponse(path)
 
     @routes.post("/h3royale/run/{run}/votes")
     async def votes(request):
@@ -78,5 +93,12 @@ def register(routes):
         tmp = os.path.join(d, "votes.json.tmp")
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=1)
-        os.replace(tmp, os.path.join(d, "votes.json"))
+        for _ in range(40):
+            try:
+                os.replace(tmp, os.path.join(d, "votes.json"))
+                break
+            except PermissionError:
+                await asyncio.sleep(0.05)
+        else:
+            raise web.HTTPServiceUnavailable()
         return web.json_response({"ok": True})

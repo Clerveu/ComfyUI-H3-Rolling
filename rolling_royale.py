@@ -333,11 +333,28 @@ def _hms(s):
 
 # ---------------------------------------------------------------- the run
 
-def _write(path, data):
+def _write(path, data, patience=6.0):
+    """Rewrite the manifest. On Windows the swap fails for as long as another program has the file open (the
+    results page reads it every few seconds), so it is retried, and a write that still can't land is skipped:
+    the manifest is written again after the next take, and a missed update must never stop a run."""
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=1)
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=1)
+        deadline = time.time() + patience
+        while True:
+            try:
+                os.replace(tmp, path)
+                return True
+            except PermissionError:
+                if time.time() > deadline:
+                    break
+                time.sleep(0.1)
+    except OSError as e:
+        print(f"{TAG} couldn't write {os.path.basename(path)}: {e}")
+        return False
+    print(f"{TAG} {os.path.basename(path)} was held open by another program for {patience:.0f}s; skipped this update")
+    return False
 
 
 def run_royale(clip, vae, audio_vae, prompt, storyboard, arms_text, base, shots, seed, soundtrack, frame_labels,
@@ -534,7 +551,7 @@ def run_royale(clip, vae, audio_vae, prompt, storyboard, arms_text, base, shots,
         if man["status"] == "running":
             man["status"] = "failed"
         man["finished"] = time.time()
-        _write(mpath, man)
+        _write(mpath, man, patience=60.0)
         model_cache.clear()
 
     lines = []
