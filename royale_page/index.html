@@ -75,6 +75,39 @@
   #rf textarea { width:100%; height:120px; font:13px ui-monospace, Consolas, monospace; color:var(--text); background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:8px; }
   #rf pre { white-space:pre-wrap; font-size:12px; background:var(--bg); border-radius:6px; padding:8px; max-height:240px; overflow:auto; margin:8px 0 0; }
   #rf .row { display:flex; gap:8px; align-items:center; margin-top:8px; } #rf .hint { color:var(--dim); font-size:12px; }
+  .cell.hit { border-color:#fff; }
+  .cell .thumbs { display:flex; flex-wrap:wrap; gap:3px 10px; margin-top:4px; font-size:12px; color:var(--dim); }
+  .cell .thumbs .th { display:inline-flex; gap:3px; align-items:center; }
+  .cell .thumbs button { padding:1px 6px; font-size:13px; opacity:.55; }
+  .cell .thumbs button.on { opacity:1; }
+  .cell .thumbs button.up.on { border-color:var(--good); background:#1f3a29; }
+  .cell .thumbs button.down.on { border-color:var(--bad); background:#3d2020; }
+  #review { padding:10px 16px 0; }
+  #review .rrow { display:flex; gap:10px; align-items:center; flex-wrap:wrap; font-size:13px; color:var(--dim); }
+  #tnames { width:300px; }
+  #mapby button.on { border-color:var(--accent); color:var(--accent); }
+  #mapbody { margin-top:10px; overflow-x:auto; }
+  #map { border-spacing:4px; }
+  #map th { font-size:12px; color:var(--dim); font-weight:500; text-align:center; padding:0 4px; white-space:nowrap; }
+  #map th.ax { color:var(--text); text-align:left; }
+  #map th.yv { text-align:right; vertical-align:middle; }
+  #map td { background:var(--panel); border-radius:6px; padding:5px; vertical-align:top; min-width:48px; height:36px; }
+  #map td.empty { background:transparent; border:1px dashed var(--line); }
+  #map.notes td { width:190px; min-width:190px; max-width:190px; }
+  .chips { display:flex; flex-wrap:wrap; gap:3px; }
+  .chip { width:18px; height:18px; border-radius:4px; background:#454a55; cursor:pointer; border:2px solid transparent; }
+  .chip.up { background:var(--good); } .chip.down { background:var(--bad); }
+  .chip.pending { background:transparent; border:1px dashed var(--dim); cursor:default; }
+  .chip.dim { opacity:.22; } .chip.hit { border-color:#fff; }
+  .chip.selA { outline:2px solid var(--accent); outline-offset:1px; } .chip.selB { outline:2px solid var(--b); outline-offset:1px; }
+  .nl { font-size:11px; line-height:1.3; margin-top:4px; color:var(--text); overflow-wrap:anywhere; }
+  .nl i { display:inline-block; width:7px; height:7px; border-radius:2px; margin-right:4px; background:#454a55; }
+  .nl i.up { background:var(--good); } .nl i.down { background:var(--bad); }
+  #mapcap { font-size:12px; color:var(--dim); margin:6px 0 0 4px; }
+  #words { display:flex; flex-wrap:wrap; gap:5px; margin-top:8px; align-items:center; font-size:12px; color:var(--dim); }
+  #words button { padding:1px 8px; font-size:12px; border-radius:11px; }
+  #words button.on { border-color:#fff; color:#fff; }
+  #words button span { color:var(--dim); margin-left:4px; }
   .legend { font-size:12px; color:var(--dim); display:flex; gap:10px; align-items:center; }
   .sw { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:3px; vertical-align:-1px; }
 </style>
@@ -89,6 +122,20 @@
   <span id="origin" class="legend"></span>
   <span id="queued"></span>
 </header>
+<section id="review">
+  <div class="rrow">
+    <label title="Up to four thumbs, named by you, separated by commas. Each one gets its own up / down under every take. Add one any time; takes you've already rated stay blank on it.">thumbs
+      <input id="tnames" placeholder="look, follows prompt, hands"></label>
+    <button id="maptoggle">Map</button>
+    <span id="mapctl">
+      colour by <span id="mapby"></span>
+      &nbsp; across <select id="mapx"></select> down <select id="mapy"></select>
+      <label><input type="checkbox" id="mapnotes"> notes on the map</label>
+    </span>
+  </div>
+  <div id="mapbody"><table id="map"></table><div id="mapcap"></div></div>
+  <div id="words"></div>
+</section>
 <div id="gridwrap"><table id="grid"></table></div>
 
 <div id="ab">
@@ -139,6 +186,7 @@ let sel = [];              // up to two keys: [A, B]
 let clock = { t: 0, playing: false, last: 0, rate: 1 };
 let abFlip = false, abShow = 0;
 let hasJob = false, rfTarget = null, watchTimer = null;
+let mapBy = null, mapX = null, mapY = null, hitWord = null, mapTimer = null;
 
 // ------------------------------------------------------------ data
 async function loadRuns(keep) {
@@ -154,7 +202,9 @@ async function loadRuns(keep) {
 async function openRun(id) {
   runId = id; sel = []; cells = {}; synced = []; clock.t = 0; setPlaying(false);
   history.replaceState(null, "", "?run=" + id);
-  votes = await (await fetch(`/h3royale/run/${id}/votes.json`)).json().catch(() => ({}));
+  votes = migrate(await (await fetch(`/h3royale/run/${id}/votes.json`)).json().catch(() => ({})));
+  mapBy = mapX = mapY = hitWord = null;
+  $("tnames").value = names().join(", ");
   hasJob = await fetch(`/h3royale/run/${id}/job.json`).then((r) => r.ok).catch(() => false);
   closeRF();
   man = null;
@@ -234,22 +284,19 @@ function build() {
         const from = [t.rendered ? `${t.rendered} rendered` : "", t.upscaled ? `${t.upscaled} upscaled` : "", t.cached ? `${t.cached} from cache` : ""].filter(Boolean).join(", ");
         const meta = document.createElement("div"); meta.className = "meta";
         meta.innerHTML = `<span class="tag"></span><span title="${esc(from)}">${fmt(t.seconds)}${t.cached || t.upscaled ? "*" : ""}</span>
-          <button class="up" title="Good">&#128077;</button><button class="down" title="Bad">&#128078;</button><input placeholder="note">`
+<input placeholder="note">`
           + (hasJob ? (a.settings.upscale ? "" : `<button class="act upb" title="Render this take again with the upscale pass, as a new run next to a copy of this one">Upscale</button>`)
             + `<button class="act royb" title="Start a new run with this take as the baseline">Royale</button>` : "");
-        const [up, down] = meta.querySelectorAll("button"), note = meta.querySelector("input");
-        const v = votes[key] || {};
-        up.classList.toggle("on", v.vote === "up"); down.classList.toggle("on", v.vote === "down"); note.value = v.note || "";
-        const set = (vote) => { const cur = votes[key] || {}; votes[key] = { ...cur, vote: cur.vote === vote ? null : vote, label: a.n === 0 ? "baseline" : (a.diff || []).join(" | "), seed: t.seed };
-          up.classList.toggle("on", votes[key].vote === "up"); down.classList.toggle("on", votes[key].vote === "down"); saveVotes(); };
-        up.onclick = () => set("up"); down.onclick = () => set("down");
-        note.oninput = () => { votes[key] = { ...(votes[key] || {}), note: note.value, label: a.n === 0 ? "baseline" : (a.diff || []).join(" | "), seed: t.seed }; saveVotes(); };
+        const note = meta.querySelector("input");
+        note.value = (votes[key] || {}).note || "";
+        note.oninput = () => { entry(key).note = note.value; saveVotes(); mapSoon(); };
         note.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter" || e.key === "Escape") note.blur(); };
         const tgt = { arm: a.n, take: r, label: `arm ${a.n}: ${a.n === 0 ? "baseline" : (a.diff || []).join(" | ")} - seed ${t.seed}` };
         const upb = meta.querySelector(".upb"), royb = meta.querySelector(".royb");
         if (upb) upb.onclick = () => { if (confirm(`Upscale ${tgt.label}?\n\nIt goes into Comfy's queue and shows up as a new run: this take, and the same take upscaled.`)) queueJob({ ...tgt, what: "upscale" }); };
         if (royb) royb.onclick = () => openRF(tgt);
         el.appendChild(meta);
+        const tb = document.createElement("div"); tb.className = "thumbs"; el.appendChild(tb);
         synced.push(video);
       } else {
         const n = document.createElement("div");
@@ -264,13 +311,166 @@ function build() {
   sel = sel.filter((k) => cells[k] && cells[k].video);
   if (!sel.length) { const first = Object.keys(cells).find((k) => cells[k].video); if (first) sel = [first]; }
   clock.t = keepT;
-  paintSel(); drawScrub(); seekAll();
+  for (const k of Object.keys(cells)) paintThumbs(k);
+  paintSel(); drawScrub(); seekAll(); drawMap();
 }
 
 function saveVotes() {
   clearTimeout(voteTimer);
   voteTimer = setTimeout(() => fetch(`/h3royale/run/${runId}/votes`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(votes) }), 400);
 }
+
+// ------------------------------------------------------------ thumbs with names
+// votes.json: {"_thumbs": ["look", "hands"], "<arm>-<take>": {thumbs: {look: "up"|"down"}, note, label, seed}}
+// Files from before the names had one {vote}; it is read as a thumb called "overall".
+function migrate(v) {
+  if (!v || typeof v !== "object" || Array.isArray(v)) v = {};
+  for (const [k, e] of Object.entries(v)) {
+    if (k[0] === "_" || !e || !("vote" in e)) continue;
+    if (e.vote) e.thumbs = { overall: e.vote, ...(e.thumbs || {}) };
+    delete e.vote;
+  }
+  if (!Array.isArray(v._thumbs) || !v._thumbs.length) v._thumbs = ["overall"];
+  return v;
+}
+const names = () => votes._thumbs || ["overall"];
+const armLabel = (a) => a.n === 0 ? "baseline" : ((a.diff || []).join(" | ") || a.label || "");
+function entry(key) { const c = cells[key]; return votes[key] = { ...(votes[key] || {}), label: armLabel(c.arm), seed: c.take.seed }; }
+const thumbOf = (key, name) => ((votes[key] || {}).thumbs || {})[name] || null;
+function setThumb(key, name, val) {
+  const e = entry(key); e.thumbs = { ...(e.thumbs || {}) };
+  if (e.thumbs[name] === val) delete e.thumbs[name]; else e.thumbs[name] = val;
+  saveVotes(); paintThumbs(key); drawMap();
+}
+function paintThumbs(key) {
+  const c = cells[key]; if (!c || !c.video) return;
+  const box = c.el.querySelector(".thumbs"); if (!box) return;
+  box.innerHTML = "";
+  for (const name of names()) {
+    const cur = thumbOf(key, name), w = document.createElement("span"); w.className = "th";
+    w.innerHTML = `<span>${esc(name)}</span><button class="up${cur === "up" ? " on" : ""}">&#128077;</button><button class="down${cur === "down" ? " on" : ""}">&#128078;</button>`;
+    const [u, d] = w.querySelectorAll("button");
+    u.onclick = () => setThumb(key, name, "up"); d.onclick = () => setThumb(key, name, "down");
+    box.appendChild(w);
+  }
+}
+function setNames(text) {
+  const all = [...new Set(text.split(",").map((x) => x.trim()).filter(Boolean))];
+  votes._thumbs = all.length ? all.slice(0, 4) : ["overall"];
+  $("tnames").value = names().join(", ");
+  if (all.length > 4) say(`Four thumbs at most; kept ${names().join(", ")}.`, true);
+  saveVotes();
+  for (const k of Object.keys(cells)) paintThumbs(k);
+  drawMap();
+}
+
+// ------------------------------------------------------------ the map
+// One small block per take, never an average: a square with two seeds shows two blocks.
+function flat(s) {
+  const o = {};
+  for (const [k, v] of Object.entries(s || {})) {
+    if (k === "loras") (v || []).forEach((l, i) => { const on = l.on && l.file && l.file !== "none";
+      o[`lora ${i + 1}`] = on ? l.file.replace(/\.safetensors$/, "") : "none"; o[`lora ${i + 1} strength`] = on ? l.strength : "off"; });
+    else if (k === "slots") { for (const [a, w] of Object.entries(v || {})) o[`{${a}}`] = w; }
+    else if (k === "seeds" || k === "exact" || k === "width" || k === "height") continue;
+    else o[k] = v;
+  }
+  if (s && s.width) o.size = `${s.width}x${s.height}`;
+  return o;
+}
+const show = (v) => v === undefined ? "(baseline)" : v === true ? "on" : v === false ? "off" : String(v);
+function axes() {
+  const fl = man.arms.map((a) => flat(a.settings)), keys = [...new Set(fl.flatMap((f) => Object.keys(f)))];
+  let vary = keys.map((k) => ({ k, n: new Set(fl.map((f) => show(f[k]))).size })).filter((x) => x.n > 1);
+  if (vary.some((x) => x.k === "mp" || x.k === "aspect")) vary = vary.filter((x) => x.k !== "size");
+  vary.sort((a, b) => b.n - a.n);
+  return { fl, vary: vary.map((x) => x.k) };
+}
+function axisValues(fl, k) {
+  const vals = [...new Set(fl.map((f) => show(f[k])))];
+  const rank = (v) => (v === "off" || v === "none" || v === "(baseline)") ? -Infinity : isFinite(+v) ? +v : NaN;
+  if (vals.every((v) => !isNaN(rank(v)))) vals.sort((a, b) => rank(a) - rank(b));
+  return vals;
+}
+function axisName(fl, k) {
+  const m = /^lora (\d+) strength$/.exec(k); if (!m) return k;
+  const files = new Set(fl.map((f) => f[`lora ${m[1]}`]).filter((x) => x !== "none"));
+  return files.size === 1 ? `${k} (${[...files][0]})` : k;
+}
+function noteWords(text) { return new Set((String(text || "").toLowerCase().match(/[a-z0-9][a-z0-9'-]*/g) || []).filter((w) => w.length > 2 && !STOP.has(w))); }
+const STOP = new Set(("the and but for with this that these those was were been are its it's too very just really kind kinda sort sorta bit little lot more less much some any not yes than then there here her hers his she him they them you your from when while still also has have had does did can could would should about into out over all one two get gets got like looks look bit pretty quite maybe though both each which what who how why because").split(" "));
+function mapSoon() { clearTimeout(mapTimer); mapTimer = setTimeout(drawMap, 250); }
+function drawMap() {
+  if (!man) return;
+  const open = localStorage.getItem("royale.map") !== "0";
+  $("mapbody").style.display = open ? "" : "none"; $("mapctl").style.display = open ? "" : "none";
+  $("maptoggle").textContent = open ? "Hide map" : "Map";
+  const { fl, vary } = axes();
+  if (!vary.includes(mapX)) mapX = vary[0] || null;
+  if (mapY !== "" && (!vary.includes(mapY) || mapY === mapX)) mapY = vary.find((k) => k !== mapX) || "";
+  if (!names().includes(mapBy)) mapBy = names()[0];
+  const opt = (k, cur) => `<option value="${esc(k)}"${k === cur ? " selected" : ""}>${esc(k ? axisName(fl, k) : "(nothing)")}</option>`;
+  $("mapx").innerHTML = vary.length ? vary.map((k) => opt(k, mapX)).join("") : opt("", "");
+  $("mapy").innerHTML = [...vary.filter((k) => k !== mapX), ""].map((k) => opt(k, mapY)).join("");
+  const by = $("mapby"); by.innerHTML = "";
+  for (const n of names()) { const b = document.createElement("button"); b.textContent = n; b.className = n === mapBy ? "on" : ""; b.onclick = () => { mapBy = n; drawMap(); }; by.append(b, " "); }
+
+  // which takes carry the clicked word
+  const hits = new Set();
+  if (hitWord) for (const k of Object.keys(cells)) if (noteWords((votes[k] || {}).note).has(hitWord)) hits.add(k);
+  for (const [k, c] of Object.entries(cells)) c.el.classList.toggle("hit", hits.has(k));
+
+  const xs = mapX ? axisValues(fl, mapX) : [""], ys = mapY ? axisValues(fl, mapY) : [""];
+  const withNotes = $("mapnotes").checked;
+  const sq = {}; let takes = 0, rated = 0; const per = [];
+  man.arms.forEach((a, i) => { const id = `${mapX ? show(fl[i][mapX]) : ""}|${mapY ? show(fl[i][mapY]) : ""}`; (sq[id] = sq[id] || []).push(a); });
+  const t = $("map"); t.innerHTML = ""; t.className = withNotes ? "notes" : "";
+  if (mapX) {
+    const h = t.insertRow();
+    h.innerHTML = "<th></th>" + xs.map((x) => `<th>${esc(x)}</th>`).join("");
+  }
+  for (const y of ys) {
+    const tr = t.insertRow();
+    tr.innerHTML = `<th class="yv">${esc(y)}</th>`;
+    for (const x of xs) {
+      const td = tr.insertCell(), arms = sq[`${x}|${y}`];
+      if (!arms) { td.className = "empty"; continue; }
+      const chips = document.createElement("div"); chips.className = "chips"; td.appendChild(chips);
+      let n = 0;
+      for (const a of arms) a.takes.forEach((tk, r) => {
+        const key = `${a.n}-${r}`, v = thumbOf(key, mapBy), note = (votes[key] || {}).note || "";
+        const ch = document.createElement("span"); n++; takes++;
+        if (tk.status !== "done") { ch.className = "chip pending"; ch.title = `arm ${a.n}: ${armLabel(a)} - seed ${tk.seed} (${tk.status})`; chips.appendChild(ch); return; }
+        if (v) rated++;
+        ch.className = "chip " + (v || "") + (hitWord ? (hits.has(key) ? " hit" : " dim") : "");
+        ch.dataset.k = key;
+        ch.title = `arm ${a.n}: ${armLabel(a)} - seed ${tk.seed}` + names().map((nm) => `\n${nm}: ${thumbOf(key, nm) || "-"}`).join("") + (note ? `\n${note}` : "");
+        ch.onclick = () => { pick(key); cells[key].el.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" }); };
+        chips.appendChild(ch);
+        if (withNotes && note) { const l = document.createElement("div"); l.className = "nl"; l.innerHTML = `<i class="${v || ""}"></i>${esc(note)}`; td.appendChild(l); }
+      });
+      per.push(n);
+    }
+  }
+  const rest = vary.filter((k) => k !== mapX && k !== mapY);
+  const lo = Math.min(...per), hi = Math.max(...per);
+  $("mapcap").textContent = !takes ? "" :
+    `Coloured by "${mapBy}": ${rated} of ${takes} takes rated. Each block is one take, so ${hi === 1 ? "every square rests on one roll" : lo === hi ? `every square rests on ${hi} rolls` : `a square rests on ${lo} to ${hi} rolls`}.`
+    + (vary.length ? "" : " Nothing differs between the arms in this run but the words.")
+    + (rest.length ? ` Also differing, not on the map: ${rest.map((k) => axisName(fl, k)).join(", ")} (hover a block for its arm).` : "");
+  paintSel0();
+
+  // the words in the notes
+  const count = {};
+  for (const k of Object.keys(cells)) for (const w of noteWords((votes[k] || {}).note)) count[w] = (count[w] || 0) + 1;
+  const top = Object.entries(count).filter(([w, n]) => n > 1 || w === hitWord).sort((a, b) => b[1] - a[1]).slice(0, 30);
+  if (hitWord && !count[hitWord]) hitWord = null;
+  const wd = $("words"); wd.innerHTML = "";
+  if (top.length) wd.append("in your notes:");
+  for (const [w, n] of top) { const b = document.createElement("button"); b.className = w === hitWord ? "on" : ""; b.innerHTML = `${esc(w)}<span>${n}</span>`;
+    b.onclick = () => { hitWord = hitWord === w ? null : w; drawMap(); }; wd.appendChild(b); }
+}
+function paintSel0() { for (const ch of document.querySelectorAll("#map .chip")) { ch.classList.toggle("selA", sel[0] === ch.dataset.k); ch.classList.toggle("selB", sel[1] === ch.dataset.k); } }
 
 // ------------------------------------------------------------ selection, sound, A/B
 function pick(key) {
@@ -284,6 +484,7 @@ function paintSel() {
     c.el.classList.toggle("selA", sel[0] === k); c.el.classList.toggle("selB", sel[1] === k);
     const tag = c.el.querySelector(".tag"); if (tag) tag.textContent = sel[0] === k ? "A" : sel[1] === k ? "B" : "";
   }
+  for (const ch of document.querySelectorAll("#map .chip")) { ch.classList.toggle("selA", sel[0] === ch.dataset.k); ch.classList.toggle("selB", sel[1] === ch.dataset.k); }
   applySound();
 }
 function applySound() {
@@ -449,6 +650,12 @@ function drawScrub() {
 
 // ------------------------------------------------------------ wiring
 $("runs").onchange = (e) => openRun(e.target.value);
+$("tnames").onchange = (e) => setNames(e.target.value);
+$("tnames").onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter" || e.key === "Escape") e.target.blur(); };
+$("maptoggle").onclick = () => { try { localStorage.setItem("royale.map", localStorage.getItem("royale.map") === "0" ? "1" : "0"); } catch (e) {} drawMap(); };
+$("mapx").onchange = (e) => { mapX = e.target.value; drawMap(); };
+$("mapy").onchange = (e) => { mapY = e.target.value; drawMap(); };
+$("mapnotes").onchange = (e) => { e.target.blur(); drawMap(); };
 const setSize = (w) => { document.documentElement.style.setProperty("--w", w + "px"); try { localStorage.setItem("royale.w", w); } catch (e) {} };
 try { const w = localStorage.getItem("royale.w"); if (w) { $("size").value = w; setSize(w); } } catch (e) {}
 $("size").oninput = (e) => setSize(e.target.value);
