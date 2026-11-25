@@ -76,12 +76,17 @@
   #rf pre { white-space:pre-wrap; font-size:12px; background:var(--bg); border-radius:6px; padding:8px; max-height:240px; overflow:auto; margin:8px 0 0; }
   #rf .row { display:flex; gap:8px; align-items:center; margin-top:8px; } #rf .hint { color:var(--dim); font-size:12px; }
   .cell.hit { border-color:#fff; }
-  .cell .thumbs { display:flex; flex-wrap:wrap; gap:3px 10px; margin-top:4px; font-size:12px; color:var(--dim); }
-  .cell .thumbs .th { display:inline-flex; gap:3px; align-items:center; }
-  .cell .thumbs button { padding:1px 6px; font-size:13px; opacity:.55; }
-  .cell .thumbs button.on { opacity:1; }
-  .cell .thumbs button.up.on { border-color:var(--good); background:#1f3a29; }
-  .cell .thumbs button.down.on { border-color:var(--bad); background:#3d2020; }
+  .thumbs { display:flex; flex-wrap:wrap; gap:3px 10px; margin-top:4px; font-size:12px; color:var(--dim); }
+  .thumbs .th { display:inline-flex; gap:3px; align-items:center; }
+  .thumbs button { padding:1px 6px; font-size:13px; opacity:.55; }
+  .thumbs button.on { opacity:1; }
+  .thumbs button.up.on { border-color:var(--good); background:#1f3a29; }
+  .thumbs button.down.on { border-color:var(--bad); background:#3d2020; }
+  #ab .rvonly { display:none; } #ab.rv .rvonly { display:inline-block; } #ab.rv .abonly { display:none; }
+  #rvrate { display:flex; gap:14px; align-items:center; padding:8px 0 2px; }
+  #rvrate .thumbs { margin:0; font-size:14px; gap:6px 18px; color:var(--text); flex-wrap:nowrap; }
+  #rvrate .thumbs button { font-size:17px; padding:3px 12px; }
+  #rvrate input { flex:1; min-width:120px; padding:6px 10px; }
   #review { padding:10px 16px 0; }
   #review .rrow { display:flex; gap:10px; align-items:center; flex-wrap:wrap; font-size:13px; color:var(--dim); }
   #tnames { width:300px; }
@@ -140,9 +145,12 @@
 
 <div id="ab">
   <div id="abtop">
-    <button id="abmode">Flip in place (F)</button>
-    <button id="abswap" style="display:none">Show the other (F)</button>
-    <span class="legend">Click any two takes in the grid to change A and B.</span>
+    <button id="abmode" class="abonly">Flip in place (F)</button>
+    <button id="abswap" class="abonly" style="display:none">Show the other (F)</button>
+    <span class="legend abonly">Click any two takes in the grid to change A and B.</span>
+    <button id="rvprev" class="rvonly" title="Previous take (up arrow)">&#9650; previous take</button>
+    <button id="rvnext" class="rvonly" title="Next take (down arrow)">next take &#9660;</button>
+    <span id="rvpos" class="legend rvonly"></span>
     <button id="abclose" style="margin-left:auto">Close (Esc)</button>
   </div>
   <div id="abstage"></div>
@@ -166,11 +174,12 @@
     <button id="nseam" title="Next join (])">join &#9654;</button>
     <select id="speed"><option value="1">1x</option><option value="0.5">1/2</option><option value="0.25">1/4</option></select>
     <button id="abopen" title="Compare the two selected takes (Enter)">A / B</button>
+    <button id="rvopen" title="One take at a time at full size, with its thumbs and note; starts at the selected take (R)">Review</button>
     <span id="readout"></span>
     <span class="legend"><span><span class="sw" style="background:var(--shot)"></span>shot</span>
       <span><span class="sw" style="background:var(--bridge)"></span>bridge</span>
       <span><span class="sw" style="background:var(--held)"></span>frames a bridge holds from its shots</span></span>
-    <span class="keys">space play &middot; , . frame &middot; [ ] join &middot; enter A/B &middot; F flip</span>
+    <span class="keys">space play &middot; , . frame &middot; [ ] join &middot; enter A/B &middot; F flip &middot; R review, &uarr; &darr; take</span>
   </div>
   <div id="scrub"><div id="head"></div></div>
 </div>
@@ -186,6 +195,7 @@ let sel = [];              // up to two keys: [A, B]
 let clock = { t: 0, playing: false, last: 0, rate: 1 };
 let abFlip = false, abShow = 0;
 let hasJob = false, rfTarget = null, watchTimer = null;
+let rvKey = null;
 let mapBy = null, mapX = null, mapY = null, hitWord = null, mapTimer = null;
 
 // ------------------------------------------------------------ data
@@ -200,6 +210,8 @@ async function loadRuns(keep) {
 }
 
 async function openRun(id) {
+  if (abOpen()) closeAB();
+  for (const v of document.querySelectorAll("#grid video")) release(v);
   runId = id; sel = []; cells = {}; synced = []; clock.t = 0; setPlaying(false);
   history.replaceState(null, "", "?run=" + id);
   votes = migrate(await (await fetch(`/h3royale/run/${id}/votes.json`)).json().catch(() => ({})));
@@ -344,7 +356,11 @@ function setThumb(key, name, val) {
 }
 function paintThumbs(key) {
   const c = cells[key]; if (!c || !c.video) return;
-  const box = c.el.querySelector(".thumbs"); if (!box) return;
+  fillThumbs(c.el.querySelector(".thumbs"), key);
+  if (rvKey === key) fillThumbs(document.querySelector("#rvrate .thumbs"), key);
+}
+function fillThumbs(box, key) {
+  if (!box) return;
   box.innerHTML = "";
   for (const name of names()) {
     const cur = thumbOf(key, name), w = document.createElement("span"); w.className = "th";
@@ -496,10 +512,19 @@ function applySound() {
 }
 function label(k) { const c = cells[k]; return `arm ${c.arm.n}: ${c.arm.n === 0 ? "baseline" : (c.arm.diff || []).join(" | ")} - seed ${c.take.seed}`; }
 
+// A player taken off the page keeps its connection and decoder until the browser gets round to
+// collecting it; a few of those and new ones never start (black A/B). Emptying it frees both at once.
+function release(v) { try { v.pause(); v.removeAttribute("src"); v.load(); } catch (e) {} }
+function clearStage() {
+  synced = synced.filter((v) => !v.dataset.ab);
+  for (const v of document.querySelectorAll("#abstage video")) release(v);
+  $("abstage").innerHTML = "";
+}
 function openAB() {
   if (sel.length < 2) { $("status").textContent = "Click two takes first, then A / B."; return; }
-  synced = synced.filter((v) => !v.dataset.ab);
-  const stage = $("abstage"); stage.innerHTML = ""; stage.classList.toggle("flip", abFlip);
+  rvKey = null; $("ab").classList.remove("rv");
+  clearStage();
+  const stage = $("abstage"); stage.classList.toggle("flip", abFlip);
   sel.forEach((k, i) => {
     const pane = document.createElement("div"); pane.className = "pane " + "AB"[i] + (abFlip && i !== abShow ? " hide" : "");
     pane.innerHTML = `<div class="cap"><b>${"AB"[i]}</b> ${esc(label(k))}</div>`;
@@ -512,9 +537,42 @@ function openAB() {
   for (const v of synced) if (!v.dataset.ab) v.pause();
   applySound(); seekAll(); if (clock.playing) playAll();
 }
-function closeAB() { $("ab").classList.remove("open"); synced = synced.filter((v) => !v.dataset.ab); $("abstage").innerHTML = ""; applySound(); seekAll(); if (clock.playing) playAll(); }
+function closeAB() {
+  const was = rvKey; rvKey = null;
+  $("ab").classList.remove("open", "rv"); clearStage(); applySound(); seekAll(); if (clock.playing) playAll();
+  if (was && cells[was]) cells[was].el.scrollIntoView({ block: "center", inline: "center" });
+}
+
+// ------------------------------------------------------------ review: one take at a time, full size
+const rvOrder = () => man ? man.arms.flatMap((a) => a.takes.map((t, r) => `${a.n}-${r}`)).filter((k) => cells[k] && cells[k].video) : [];
+function openRV(key) {
+  const ks = rvOrder(); if (!ks.length) return;
+  if (!key || !ks.includes(key)) key = ks[0];
+  const fresh = !abOpen(), i = ks.indexOf(key), c = cells[key];
+  rvKey = key; sel = [key]; lastHeard = key;
+  clearStage();
+  const stage = $("abstage"); stage.classList.remove("flip");
+  const pane = document.createElement("div"); pane.className = "pane A";
+  pane.innerHTML = `<div class="cap">${esc(label(key))}</div>`;
+  const v = document.createElement("video"); v.src = c.video.dataset.full; v.muted = true; v.playsInline = true; v.preload = "auto"; v.dataset.ab = "1";
+  v.onclick = () => setPlaying(!clock.playing);
+  const rate = document.createElement("div"); rate.id = "rvrate"; rate.innerHTML = `<div class="thumbs"></div><input placeholder="note">`;
+  const note = rate.querySelector("input"), tile = c.el.querySelector(".meta input");
+  note.value = (votes[key] || {}).note || "";
+  note.oninput = () => { entry(key).note = note.value; if (tile) tile.value = note.value; saveVotes(); mapSoon(); };
+  note.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter" || e.key === "Escape") note.blur(); };
+  pane.append(v, rate); stage.appendChild(pane); synced.push(v);
+  fillThumbs(rate.querySelector(".thumbs"), key);
+  $("ab").classList.add("open", "rv");
+  $("rvpos").textContent = `take ${i + 1} of ${ks.length}`;
+  $("rvprev").disabled = i === 0; $("rvnext").disabled = i === ks.length - 1;
+  for (const g of synced) if (!g.dataset.ab) g.pause();
+  clock.t = 0; paintSel(); drawScrub();
+  setPlaying(fresh ? true : clock.playing);
+}
+function rvStep(d) { if (!rvKey) return; const ks = rvOrder(), k = ks[ks.indexOf(rvKey) + d]; if (k) openRV(k); }
 function flip() {
-  if (!$("ab").classList.contains("open")) return;
+  if (!$("ab").classList.contains("open") || rvKey) return;
   if (!abFlip) { abFlip = true; abShow = 0; openAB(); return; }
   abShow = 1 - abShow;
   document.querySelectorAll("#abstage .pane").forEach((p, i) => p.classList.toggle("hide", i !== abShow));
@@ -577,7 +635,10 @@ async function planRF() {
 // ------------------------------------------------------------ one clock for every player
 const fps = () => (man && man.fps) || 24;
 function refTake() { const k = sel[0] && cells[sel[0]] ? sel[0] : Object.keys(cells).find((x) => cells[x].video); return k ? cells[k].take : null; }
-function total() { const ts = Object.values(cells).filter((c) => c.video).map((c) => c.take.frames || 0); return ts.length ? Math.max(...ts) / fps() : 0; }
+function total() {
+  const shown = abOpen() ? sel.map((k) => cells[k]).filter(Boolean) : Object.values(cells);
+  const ts = shown.filter((c) => c.video).map((c) => c.take.frames || 0); return ts.length ? Math.max(...ts) / fps() : 0;
+}
 function targetFor(v) { const d = isFinite(v.duration) ? v.duration : 1e9; return Math.min(clock.t, Math.max(0, d - 0.5 / fps())); }
 const abOpen = () => $("ab").classList.contains("open");
 function active() { const ab = abOpen(); return synced.filter((v) => !!v.dataset.ab === ab); }
@@ -668,6 +729,7 @@ $("rfclose").onclick = closeRF; $("rfplan").onclick = planRF;
 $("rfrun").onclick = async () => { const t = rfTarget; if (t && await queueJob({ ...t, what: "royale", arms: $("rfarms").value })) closeRF(); };
 $("rfarms").onkeydown = (e) => { e.stopPropagation(); if (e.key === "Escape") closeRF(); };
 $("abopen").onclick = openAB; $("abclose").onclick = closeAB; $("abswap").onclick = flip;
+$("rvopen").onclick = () => openRV(lastHeard || sel[0]); $("rvprev").onclick = () => rvStep(-1); $("rvnext").onclick = () => rvStep(1);
 $("abmode").onclick = () => { abFlip = !abFlip; abShow = 0; openAB(); };
 let dragging = false;
 const scrubTo = (e) => { const r = $("scrub").getBoundingClientRect(); gotoFrame(Math.round(Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) * total() * fps())); };
@@ -683,9 +745,12 @@ document.onkeydown = (e) => {
   else if (k === "." || k === "ArrowRight") step(1);
   else if (k === "[") seam(-1); else if (k === "]") seam(1);
   else if (k === "Enter") { $("ab").classList.contains("open") ? closeAB() : openAB(); }
+  else if (k === "r" || k === "R") { rvKey ? closeAB() : openRV(lastHeard || sel[0]); }
+  else if (rvKey && (k === "ArrowDown" || k === "PageDown")) { e.preventDefault(); rvStep(1); }
+  else if (rvKey && (k === "ArrowUp" || k === "PageUp")) { e.preventDefault(); rvStep(-1); }
   else if (k === "Escape") closeAB();
   else if (k === "f" || k === "F") flip();
-  else if (k === "s" || k === "S") { if ($("ab").classList.contains("open")) { abFlip = !abFlip; abShow = 0; openAB(); } }
+  else if (k === "s" || k === "S") { if ($("ab").classList.contains("open") && !rvKey) { abFlip = !abFlip; abShow = 0; openAB(); } }
 };
 requestAnimationFrame(tick);
 loadRuns();
