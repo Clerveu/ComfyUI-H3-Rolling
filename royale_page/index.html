@@ -175,11 +175,13 @@
     <select id="speed"><option value="1">1x</option><option value="0.5">1/2</option><option value="0.25">1/4</option></select>
     <button id="abopen" title="Compare the two selected takes (Enter)">A / B</button>
     <button id="rvopen" title="One take at a time at full size, with its thumbs and note; starts at the selected take (R)">Review</button>
+    <button id="mute" title="Mute / unmute (M)">&#128266;</button>
+    <input id="vol" type="range" min="0" max="1" step="0.02" value="1" title="Volume" style="width:90px; padding:0">
     <span id="readout"></span>
     <span class="legend"><span><span class="sw" style="background:var(--shot)"></span>shot</span>
       <span><span class="sw" style="background:var(--bridge)"></span>bridge</span>
       <span><span class="sw" style="background:var(--held)"></span>frames a bridge holds from its shots</span></span>
-    <span class="keys">space play &middot; , . frame &middot; [ ] join &middot; enter A/B &middot; F flip &middot; R review, &uarr; &darr; take</span>
+    <span class="keys">space play &middot; , . frame &middot; [ ] join &middot; enter A/B &middot; F flip &middot; R review, &uarr; &darr; take &middot; M mute</span>
   </div>
   <div id="scrub"><div id="head"></div></div>
 </div>
@@ -503,7 +505,18 @@ function paintSel() {
   for (const ch of document.querySelectorAll("#map .chip")) { ch.classList.toggle("selA", sel[0] === ch.dataset.k); ch.classList.toggle("selB", sel[1] === ch.dataset.k); }
   applySound();
 }
+let sound = { vol: 1, off: false };
+try { const sv = JSON.parse(localStorage.getItem("royale.sound") || "null"); if (sv && isFinite(sv.vol)) sound = { vol: Math.min(1, Math.max(0, +sv.vol)), off: !!sv.off }; } catch (e) {}
+function setSound(ch) {
+  sound = { ...sound, ...ch };
+  try { localStorage.setItem("royale.sound", JSON.stringify(sound)); } catch (e) {}
+  applySound();
+}
 function applySound() {
+  const quiet = sound.off || sound.vol === 0;
+  $("mute").innerHTML = quiet ? "&#128263;" : "&#128266;"; $("vol").value = sound.off ? 0 : sound.vol;
+  for (const v of document.querySelectorAll("video")) v.volume = sound.vol;
+  if (quiet) { for (const v of document.querySelectorAll("video")) v.muted = true; return; }
   const ab = abOpen();
   const heard = ab ? null : (lastHeard && cells[lastHeard] ? lastHeard : sel[0]);
   for (const [k, c] of Object.entries(cells)) if (c.video) c.video.muted = k !== heard;
@@ -728,6 +741,9 @@ $("speed").onchange = (e) => { clock.rate = +e.target.value; for (const v of syn
 $("rfclose").onclick = closeRF; $("rfplan").onclick = planRF;
 $("rfrun").onclick = async () => { const t = rfTarget; if (t && await queueJob({ ...t, what: "royale", arms: $("rfarms").value })) closeRF(); };
 $("rfarms").onkeydown = (e) => { e.stopPropagation(); if (e.key === "Escape") closeRF(); };
+$("mute").onclick = () => setSound(sound.vol === 0 ? { off: false, vol: 0.5 } : { off: !sound.off });
+$("vol").oninput = (e) => setSound({ vol: +e.target.value, off: false });
+$("vol").onchange = (e) => e.target.blur();
 $("abopen").onclick = openAB; $("abclose").onclick = closeAB; $("abswap").onclick = flip;
 $("rvopen").onclick = () => openRV(lastHeard || sel[0]); $("rvprev").onclick = () => rvStep(-1); $("rvnext").onclick = () => rvStep(1);
 $("abmode").onclick = () => { abFlip = !abFlip; abShow = 0; openAB(); };
@@ -745,6 +761,7 @@ document.onkeydown = (e) => {
   else if (k === "." || k === "ArrowRight") step(1);
   else if (k === "[") seam(-1); else if (k === "]") seam(1);
   else if (k === "Enter") { $("ab").classList.contains("open") ? closeAB() : openAB(); }
+  else if (k === "m" || k === "M") $("mute").click();
   else if (k === "r" || k === "R") { rvKey ? closeAB() : openRV(lastHeard || sel[0]); }
   else if (rvKey && (k === "ArrowDown" || k === "PageDown")) { e.preventDefault(); rvStep(1); }
   else if (rvKey && (k === "ArrowUp" || k === "PageUp")) { e.preventDefault(); rvStep(-1); }
@@ -752,6 +769,7 @@ document.onkeydown = (e) => {
   else if (k === "f" || k === "F") flip();
   else if (k === "s" || k === "S") { if ($("ab").classList.contains("open") && !rvKey) { abFlip = !abFlip; abShow = 0; openAB(); } }
 };
+applySound();
 requestAnimationFrame(tick);
 loadRuns();
 </script>
