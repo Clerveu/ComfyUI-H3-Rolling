@@ -87,6 +87,12 @@
   #rvrate .thumbs { margin:0; font-size:14px; gap:6px 18px; color:var(--text); flex-wrap:nowrap; }
   #rvrate .thumbs button { font-size:17px; padding:3px 12px; }
   #rvrate input { flex:1; min-width:120px; padding:6px 10px; }
+  .score { display:flex; gap:2px; }
+  .cell .score { flex-basis:100%; }
+  .score button { flex:1; min-width:0; padding:1px 0; font-size:11px; opacity:.6; }
+  .score button.on { opacity:1; color:#fff; border-color:#fff; font-weight:700; }
+  #rvrate .score button { font-size:14px; padding:4px 9px; }
+  .chip.sc { color:#fff; font:700 10px/1 system-ui, sans-serif; display:flex; align-items:center; justify-content:center; }
   #review { padding:10px 16px 0; }
   #review .rrow { display:flex; gap:10px; align-items:center; flex-wrap:wrap; font-size:13px; color:var(--dim); }
   #tnames { width:300px; }
@@ -131,6 +137,7 @@
   <div class="rrow">
     <label title="Up to four thumbs, named by you, separated by commas. Each one gets its own up / down under every take. Add one any time; takes you've already rated stay blank on it.">thumbs
       <input id="tnames" placeholder="look, follows prompt, hands"></label>
+    <label title="A row of 0 to 10 under every take, for a broad how-good-is-it. The map can be coloured by it: red at 0 through to blue at 10."><input type="checkbox" id="scoreon"> 0-10 score</label>
     <button id="maptoggle">Map</button>
     <span id="mapctl">
       colour by <span id="mapby"></span>
@@ -212,13 +219,15 @@ async function loadRuns(keep) {
 }
 
 async function openRun(id) {
+  flushVotes();
   if (abOpen()) closeAB();
   for (const v of document.querySelectorAll("#grid video")) release(v);
   runId = id; sel = []; cells = {}; synced = []; clock.t = 0; setPlaying(false);
   history.replaceState(null, "", "?run=" + id);
   votes = migrate(await (await fetch(`/h3royale/run/${id}/votes.json`)).json().catch(() => ({})));
   mapBy = mapX = mapY = hitWord = null;
-  $("tnames").value = names().join(", ");
+  try { mapBy = localStorage.getItem("royale.by." + id); } catch (e) {}
+  $("tnames").value = names().join(", "); $("scoreon").checked = scoreOn();
   hasJob = await fetch(`/h3royale/run/${id}/job.json`).then((r) => r.ok).catch(() => false);
   closeRF();
   man = null;
@@ -329,10 +338,14 @@ function build() {
   paintSel(); drawScrub(); seekAll(); drawMap();
 }
 
-function saveVotes() {
-  clearTimeout(voteTimer);
-  voteTimer = setTimeout(() => fetch(`/h3royale/run/${runId}/votes`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(votes) }), 400);
+function postVotes() {
+  voteTimer = null;
+  return fetch(`/h3royale/run/${runId}/votes`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(votes), keepalive: true });
 }
+function saveVotes() { clearTimeout(voteTimer); voteTimer = setTimeout(postVotes, 400); }
+// a change still waiting its 400 ms goes out at once when the page or the run is left
+function flushVotes() { if (voteTimer) { clearTimeout(voteTimer); postVotes(); } }
+addEventListener("pagehide", flushVotes);
 
 // ------------------------------------------------------------ thumbs with names
 // votes.json: {"_thumbs": ["look", "hands"], "<arm>-<take>": {thumbs: {look: "up"|"down"}, note, label, seed}}
@@ -371,6 +384,31 @@ function fillThumbs(box, key) {
     u.onclick = () => setThumb(key, name, "up"); d.onclick = () => setThumb(key, name, "down");
     box.appendChild(w);
   }
+  if (!scoreOn()) return;
+  const row = document.createElement("div"); row.className = "score"; const cur = scoreOf(key);
+  for (let n = 0; n <= 10; n++) {
+    const b = document.createElement("button"); b.textContent = n; b.title = `${n} of 10`;
+    if (n === cur) { b.className = "on"; b.style.background = scoreColor(n); }
+    b.onclick = () => setScore(key, n);
+    row.appendChild(b);
+  }
+  box.appendChild(row);
+}
+// votes.json: "_score": true turns the row on for the run; a take's number is its "score" (0-10).
+const SCORE = "\u0000score";
+const scoreOn = () => !!votes._score;
+const scoreOf = (key) => { const n = (votes[key] || {}).score; return Number.isInteger(n) ? n : null; };
+function scoreColor(n) { const a = [226, 68, 68], b = [58, 124, 255], t = n / 10; return `rgb(${a.map((x, i) => Math.round(x + (b[i] - x) * t)).join(",")})`; }
+function setScore(key, n) {
+  const e = entry(key);
+  if (e.score === n) delete e.score; else e.score = n;
+  saveVotes(); paintThumbs(key); drawMap();
+}
+function setScoreOn(on) {
+  if (on) { votes._score = true; mapBy = SCORE; } else delete votes._score;
+  saveVotes();
+  for (const k of Object.keys(cells)) paintThumbs(k);
+  drawMap();
 }
 function setNames(text) {
   const all = [...new Set(text.split(",").map((x) => x.trim()).filter(Boolean))];
@@ -426,12 +464,15 @@ function drawMap() {
   const { fl, vary } = axes();
   if (!vary.includes(mapX)) mapX = vary[0] || null;
   if (mapY !== "" && (!vary.includes(mapY) || mapY === mapX)) mapY = vary.find((k) => k !== mapX) || "";
-  if (!names().includes(mapBy)) mapBy = names()[0];
+  if (!names().includes(mapBy) && !(mapBy === SCORE && scoreOn())) mapBy = names()[0];
   const opt = (k, cur) => `<option value="${esc(k)}"${k === cur ? " selected" : ""}>${esc(k ? axisName(fl, k) : "(nothing)")}</option>`;
   $("mapx").innerHTML = vary.length ? vary.map((k) => opt(k, mapX)).join("") : opt("", "");
   $("mapy").innerHTML = [...vary.filter((k) => k !== mapX), ""].map((k) => opt(k, mapY)).join("");
   const by = $("mapby"); by.innerHTML = "";
   for (const n of names()) { const b = document.createElement("button"); b.textContent = n; b.className = n === mapBy ? "on" : ""; b.onclick = () => { mapBy = n; drawMap(); }; by.append(b, " "); }
+  if (scoreOn()) { const b = document.createElement("button"); b.textContent = "0-10"; b.className = mapBy === SCORE ? "on" : ""; b.onclick = () => { mapBy = SCORE; drawMap(); }; by.append(b, " "); }
+  const sc = mapBy === SCORE;
+  try { localStorage.setItem("royale.by." + runId, mapBy); } catch (e) {}
 
   // which takes carry the clicked word
   const hits = new Set();
@@ -456,16 +497,18 @@ function drawMap() {
       const chips = document.createElement("div"); chips.className = "chips"; td.appendChild(chips);
       let n = 0;
       for (const a of arms) a.takes.forEach((tk, r) => {
-        const key = `${a.n}-${r}`, v = thumbOf(key, mapBy), note = (votes[key] || {}).note || "";
+        const key = `${a.n}-${r}`, s10 = scoreOf(key), v = sc ? (s10 === null ? "" : "sc") : thumbOf(key, mapBy), note = (votes[key] || {}).note || "";
+        const paint = sc && s10 !== null ? scoreColor(s10) : "";
         const ch = document.createElement("span"); n++; takes++;
         if (tk.status !== "done") { ch.className = "chip pending"; ch.title = `arm ${a.n}: ${armLabel(a)} - seed ${tk.seed} (${tk.status})`; chips.appendChild(ch); return; }
         if (v) rated++;
         ch.className = "chip " + (v || "") + (hitWord ? (hits.has(key) ? " hit" : " dim") : "");
         ch.dataset.k = key;
-        ch.title = `arm ${a.n}: ${armLabel(a)} - seed ${tk.seed}` + names().map((nm) => `\n${nm}: ${thumbOf(key, nm) || "-"}`).join("") + (note ? `\n${note}` : "");
+        if (paint) { ch.style.background = paint; ch.textContent = s10; }
+        ch.title = `arm ${a.n}: ${armLabel(a)} - seed ${tk.seed}` + names().map((nm) => `\n${nm}: ${thumbOf(key, nm) || "-"}`).join("") + (scoreOn() ? `\n0-10: ${s10 === null ? "-" : s10}` : "") + (note ? `\n${note}` : "");
         ch.onclick = () => { pick(key); cells[key].el.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" }); };
         chips.appendChild(ch);
-        if (withNotes && note) { const l = document.createElement("div"); l.className = "nl"; l.innerHTML = `<i class="${v || ""}"></i>${esc(note)}`; td.appendChild(l); }
+        if (withNotes && note) { const l = document.createElement("div"); l.className = "nl"; l.innerHTML = `<i class="${sc ? "" : v || ""}"${paint ? ` style="background:${paint}"` : ""}></i>${esc(note)}`; td.appendChild(l); }
       });
       per.push(n);
     }
@@ -473,7 +516,7 @@ function drawMap() {
   const rest = vary.filter((k) => k !== mapX && k !== mapY);
   const lo = Math.min(...per), hi = Math.max(...per);
   $("mapcap").textContent = !takes ? "" :
-    `Coloured by "${mapBy}": ${rated} of ${takes} takes rated. Each block is one take, so ${hi === 1 ? "every square rests on one roll" : lo === hi ? `every square rests on ${hi} rolls` : `a square rests on ${lo} to ${hi} rolls`}.`
+    `Coloured by ${sc ? "the 0-10 score, red at 0 to blue at 10" : `"${mapBy}"`}: ${rated} of ${takes} takes rated. Each block is one take, so ${hi === 1 ? "every square rests on one roll" : lo === hi ? `every square rests on ${hi} rolls` : `a square rests on ${lo} to ${hi} rolls`}.`
     + (vary.length ? "" : " Nothing differs between the arms in this run but the words.")
     + (rest.length ? ` Also differing, not on the map: ${rest.map((k) => axisName(fl, k)).join(", ")} (hover a block for its arm).` : "");
   paintSel0();
@@ -726,6 +769,7 @@ function drawScrub() {
 $("runs").onchange = (e) => openRun(e.target.value);
 $("tnames").onchange = (e) => setNames(e.target.value);
 $("tnames").onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter" || e.key === "Escape") e.target.blur(); };
+$("scoreon").onchange = (e) => { e.target.blur(); setScoreOn(e.target.checked); };
 $("maptoggle").onclick = () => { try { localStorage.setItem("royale.map", localStorage.getItem("royale.map") === "0" ? "1" : "0"); } catch (e) {} drawMap(); };
 $("mapx").onchange = (e) => { mapX = e.target.value; drawMap(); };
 $("mapy").onchange = (e) => { mapY = e.target.value; drawMap(); };
