@@ -6,7 +6,7 @@ import os
 import comfy.samplers
 import folder_paths
 
-from . import rolling_core, rolling_royale, rolling_timeline
+from . import rolling_core, rolling_refmods, rolling_royale, rolling_timeline
 
 VIDEO_EXTS = (".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v")
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff")
@@ -305,6 +305,7 @@ class H3RollingTimeline:
             optional[f"picture_{i}"] = ("IMAGE", {"tooltip": f"image {i} in the storyboard, <Picture {i}> in the prompt"})
         optional["ref_video"] = ("IMAGE", {"tooltip": "Reference video frames at 24 fps (2-15s): <Video 1> in the prompt."})
         optional["ref_audio"] = ("AUDIO", {"tooltip": "Standalone reference audio: <Audio 1> in the prompt."})
+        optional["mods"] = ("H3_REF_MODS", {"tooltip": MODS_TIP})
         return {
             "required": {
                 "model": ("MODEL",),
@@ -344,12 +345,15 @@ class H3RollingTimeline:
             width=864, height=480, seed=0, ref_image_size="max", soundtrack="generated",
             upscale_pass=False, upscale_megapixels=1.5, upscale_steps=2, upscale_denoise=0.4, frame_labels=False,
             bridge_hold="5 frames", keystone=False, sampler=None, sigmas=None, ref_video=None, ref_audio=None,
+            mods=None,
             # not on the node any more; still honoured from an API graph or lab.json
             timeline="", beat="", steps=6, sampler_name="er_sde", scheduler="beta", pin_mode="mask", **pictures):
         from . import storyboard as storyboard_mod
         importlib.reload(rolling_core)
+        importlib.reload(rolling_refmods)
         importlib.reload(rolling_timeline)
         importlib.reload(storyboard_mod)
+        mod_groups = rolling_refmods.groups(mods)
         lab = rolling_core._lab()
         steps, sampler_name, scheduler = (lab.get("steps", steps), lab.get("sampler_name", sampler_name),
                                           lab.get("scheduler", scheduler))
@@ -371,7 +375,8 @@ class H3RollingTimeline:
             upscale_megapixels=upscale_megapixels, upscale_steps=upscale_steps, upscale_denoise=upscale_denoise,
             frame_labels=frame_labels, pictures=[pictures.get(f"picture_{i}") for i in range(1, 10)],
             ref_video=ref_video, ref_audio=ref_audio, sampler=sampler, sigmas=sigmas, solo=solo, extra_notes=notes,
-            hold=BRIDGE_HOLDS.get(bridge_hold, (5, 0)), keystone=keystone)
+            hold=BRIDGE_HOLDS.get(bridge_hold, (5, 0)), keystone=keystone,
+            mods=rolling_refmods.rows(mod_groups, rolling_refmods.state(mod_groups)) if mods is not None else None)
 
 
 ARMS_TIP = """The node's own settings are the baseline. Each line here is one more arm and only says what is different.
@@ -381,16 +386,20 @@ ARMS_TIP = """The node's own settings are the baseline. Each line here is one mo
   lora 1 strength = 0.6 | 0.8 | 1.0             a sweep, one arm per value:  |
   cross: steps = 4 | 6; lora 1 strength = 0.8 | 1.0     two sweeps, every combination
   a = locked-off tripod shot | (empty)          what goes where {a} is in the prompt or storyboard
+  refmod 1 look = 0.6 | 1.0                     a RefMod from the stack wired into mods (by place or name)
   control                                       the baseline again with the piece cache off
   # a note
 
 Settings: model, lora N (on / off / a strength), lora N strength, lora N file, steps, sampler, scheduler,
 mp (megapixels), aspect (9:16), size (an exact 1024x576), shot seconds, bridge seconds, hold (5 / 22), upscale (on / off), upscale mp, upscale steps,
-upscale denoise, pictures (match / max), seeds, and any slot letter.
+upscale denoise, pictures (match / max), keystone, attention, refmod N (on / off / a weight), refmod N look, refmod N voice,
+seeds, and any slot letter.
 
 {a: handheld, slight sway} in the prompt is a slot with the words the baseline uses. An arm that sets a slot runs on at least 3 seeds unless its line says seeds = N."""
 
 LORA_SLOTS = 4
+MODS_TIP = ("RefMods from a Fantastic H3 RefMod Stack. In the prompt they come after the media: a look made from several "
+            "pictures is the next <Video n>, a voice the next <Audio n>; the report lists the exact tags.")
 
 
 class H3RollingRoyale:
@@ -459,6 +468,7 @@ class H3RollingRoyale:
                     for i in range(1, 10)}
         optional["ref_video"] = ("IMAGE", {"tooltip": "Reference video frames at 24 fps (2-15s): <Video 1> in the prompt."})
         optional["ref_audio"] = ("AUDIO", {"tooltip": "Standalone reference audio: <Audio 1> in the prompt."})
+        optional["mods"] = ("H3_REF_MODS", {"tooltip": MODS_TIP + " An arm can say refmod 1 look = 0.6, refmod 1 voice = 0, refmod 1 = off."})
         # hidden: the whole job as queued (saved into the run folder so the results page can start a new run
         # from one of this run's takes), this node's id in it, and what the page sent along when it did
         return {"required": required, "optional": optional,
@@ -467,10 +477,10 @@ class H3RollingRoyale:
     def run(self, clip, vae, audio_vae, model, steps, sampler_name, scheduler, prompt, storyboard, arms, shots,
             shot_seconds, bridge_seconds, aspect_ratio, megapixels, seed, seeds_per_arm, ref_image_size, soundtrack,
             upscale_pass, upscale_megapixels, upscale_steps, upscale_denoise, frame_labels, bridge_hold, mode,
-            keystone=False, attention="default", ref_video=None, ref_audio=None, job_graph=None, node_id=None,
+            keystone=False, attention="default", ref_video=None, ref_audio=None, mods=None, job_graph=None, node_id=None,
             extra=None, **kw):
         from . import storyboard as storyboard_mod
-        for mod in (rolling_core, rolling_timeline, storyboard_mod, rolling_royale):
+        for mod in (rolling_core, rolling_refmods, rolling_timeline, storyboard_mod, rolling_royale):
             importlib.reload(mod)
         base = {
             "model": model,
@@ -489,7 +499,8 @@ class H3RollingRoyale:
         report, folder = rolling_royale.run_royale(
             clip, vae, audio_vae, prompt, storyboard, arms, base, shots, seed, soundtrack, frame_labels, mode,
             [kw.get(f"picture_{i}") for i in range(1, 10)], ref_video=ref_video, ref_audio=ref_audio,
-            job=job, origin=extra.get("h3royale_origin"))
+            job=job, origin=extra.get("h3royale_origin"), mods=mods,
+            refmod_weights=(extra.get("h3royale_base") or {}).get("refmods"))
         return {"ui": {"text": [report]}, "result": (report, folder)}
 
 

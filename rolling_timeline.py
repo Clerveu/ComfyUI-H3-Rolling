@@ -20,6 +20,7 @@ import time
 import numpy as np
 import torch
 
+from . import rolling_refmods
 from .rolling_core import FPS, FrameSink, _lab, _mark, _stream_path, _T, align, video_latent_t
 
 PIN = 5       # frames a bridge shares with the shot on each side (one 1-frame latent + one 4-frame latent)
@@ -346,7 +347,10 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
                  upscale_pass=False, upscale_megapixels=1.5, upscale_steps=2, upscale_denoise=0.4,
                  frame_labels=False, pictures=(), ref_video=None, ref_audio=None, sampler=None, sigmas=None,
                  solo=None, extra_notes=(), hold=(PIN, 0), piece_cache=None, stream_to=None, report=None,
-                 keystone=False):
+                 keystone=False, mods=None):
+    # mods: a RefMod bundle (rolling_refmods). None = Comfy's own Reference to Video encodes every piece, as
+    # always. A bundle, even an empty one, = the Fantastic pack's RefMod Text Encode does, so an arm with its
+    # RefMods switched off is encoded the same way as the arms it is compared with.
     # keystone: shot 1's first frame is written into frame 0 of every later shot and locked (roycho87's Geiru
     # Keystone, here on fresh shots). That frame sits in the shot's run-up, so it is never shown. It gives a
     # shot rendered on its own the place and framing of shot 1 without another reference picture.
@@ -464,6 +468,10 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
         N = (P + 1) // 2
         starts, F = layout(pieces)
     use_still = any(p["still"] for p in pieces)
+    refmod_encoder = rolling_refmods.encoder() if mods is not None else None
+    if mods:
+        notes.append("RefMods, with all the media: " + "; ".join(
+            rolling_refmods.tags(mods, len(pics), ref_video is not None, ref_audio is not None)))
     if keystone and pieces[0]["gi"] != 0:
         keystone = False
         solo_line += "; the keystone needs shot 1 and was left out of this solo run"
@@ -533,6 +541,7 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
             vid_id = _tensor_id(ref_video) if ref_video is not None else None
             aud_id = ([_tensor_id(ref_audio["waveform"]), ref_audio["sample_rate"]] if ref_audio is not None else None)
             up_parts = ([upscale_megapixels, up_model, [round(float(x), 6) for x in up_sigmas]] if upscaler else None)
+            mod_ids = ([[_tensor_id(m.latent), m.kind, round(float(x), 4)] for m, x in mods] if mods is not None else None)
         except Exception as e:
             print(f"{tag} piece cache off for this run: couldn't fingerprint the inputs ({e})")
             use_cache = False
@@ -565,6 +574,8 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
         lo = [p["kind"], common, text, p["render"], s_lo, [pic_ids[j] for j in p["pics"]],
               [vid_id, p["vstart"]] if p["video"] else None, aud_id if p["audio"] else None,
               still_from if p["still"] else None]
+        if mod_ids is not None:
+            lo += ["refmods", mod_ids]
         if i % 2:
             lo += [pin_of(i), fps[i - 1][0], fps[i + 1][0]] + ([pieces[i + 1]["lead"]] if pieces[i + 1]["lead"] else [])
             if (p["hold"], p["drop"]) != (PIN, 0):
@@ -594,12 +605,22 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
         if p["still"] and still is not None:
             images = images + [still]
             still_tag = f"<Picture {len(images)}>"
+        video = (ref_video[[(p["vstart"] + t) % ref_video.shape[0] for t in range(p["render"])]] if p["video"] else None)
+        if refmod_encoder is not None:
+            cond, ref_map, latent = refmod_encoder.encode(
+                clip, with_still(p["text"], still_tag), width=w, height=h, length=p["render"],
+                ref_image_size=ref_image_size, mods=list(mods), vae=vae, audio_vae=audio_vae,
+                references={"pictures": images, "videos": [video] if video is not None else [], "video_audios": [],
+                            "audios": [ref_audio] if p["audio"] else []})
+            if not p.get("map_shown"):
+                p["map_shown"] = True
+                print(f"{tag} {p['name']} reads its references as: " + " | ".join(ref_map.splitlines()))
+            return cond, latent
         out = MiniMaxH3ReferenceToVideo.execute(
             clip=clip, prompt=with_still(p["text"], still_tag), width=w, height=h, length=p["render"],
             ref_image_size=ref_image_size, vae=vae, audio_vae=audio_vae,
             ref_images={f"ref_image_{j + 1}": im for j, im in enumerate(images)} or None,
-            ref_videos={"ref_video_1": ref_video[[(p["vstart"] + t) % ref_video.shape[0] for t in range(p["render"])]]}
-            if p["video"] else None,
+            ref_videos={"ref_video_1": video} if video is not None else None,
             ref_audios={"ref_audio_1": ref_audio} if p["audio"] else None)
         return out.args
 

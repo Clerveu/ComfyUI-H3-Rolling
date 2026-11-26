@@ -429,6 +429,7 @@ function flat(s) {
   for (const [k, v] of Object.entries(s || {})) {
     if (k === "loras") (v || []).forEach((l, i) => { const on = l.on && l.file && l.file !== "none";
       o[`lora ${i + 1}`] = on ? l.file.replace(/\.safetensors$/, "") : "none"; o[`lora ${i + 1} strength`] = on ? l.strength : "off"; });
+    else if (k === "refmods") (v || []).forEach((r) => { for (const c of ["look", "voice"]) if (r[c] != null) o[`${r.name} ${c}`] = r[c]; });
     else if (k === "slots") { for (const [a, w] of Object.entries(v || {})) o[`{${a}}`] = w; }
     else if (k === "seeds" || k === "exact" || k === "width" || k === "height") continue;
     else o[k] = v;
@@ -744,6 +745,7 @@ async function jobToWorkflow(job) {
   const media = all.find((n) => n.type === "MiniMaxH3MediaLoader"), top = media ? 810 : 370;
   put(into("clip"), [0, 260], [420, 106]); put(into("vae"), [0, 410], [420, 58]); put(into("audio_vae"), [0, 510], [420, 58]);
   put(media, [460, 0], [1000, 760]); put(all.find((n) => n.type === "MiniMaxH3ReferenceSplitter"), [1480, 0], [252, 372]);
+  put(all.find((n) => n.type === "MiniMaxH3RefModStack"), [1760, 0], [600, 678]);
   all.filter((n) => n.type === "H3RollingPicture").forEach((n, k) => put(n, [460 + 260 * k, 0], [250, 320]));
   put(royale, [460, top], [820, 1500]);
   all.filter((n) => n.type === "PreviewAny").forEach((n, k) => put(n, [1320, top + 560 * k], [520, 520]));

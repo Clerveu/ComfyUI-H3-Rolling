@@ -72,6 +72,8 @@ def build_job(job, manifest, arm_n, take_i, what, arms_text="", mode="run"):
     i["attention"] = S.get("attention", "default")
     i["mode"] = "plan only" if mode == "plan" else "run"
     base = {}
+    if S.get("refmods"):  # the take's RefMod weights, handed over beside the job: the stack in it has the old baseline's
+        base["refmods"] = S["refmods"]
     if S.get("aspect") and not S.get("exact"):
         i["aspect_ratio"], i["megapixels"] = S["aspect"], float(S["mp"])
     else:  # an exact size (or a run from before the node had aspect + megapixels): handed over beside the job

@@ -28,6 +28,10 @@ What a line can change
   pictures = match | max
   keystone = on | off                     (shot 1's first frame locked into frame 0 of every later shot)
   attention = kitchen | default           (kitchen = Comfy's INT8 attention, as Seed Hunter runs; default = the model as loaded)
+  refmod 1 look = 0.6     refmod 1 voice = 0      refmod 1 = off | on | 0.8
+                                          (a RefMod from the stack wired into mods, by its place in the stack or by
+                                           name: refmod mira look = 0.6. Up to 1 is strength, above 1 adds copies,
+                                           0 or off leaves it out. Without look / voice the line sets both.)
   seeds = 3                               (this arm's own number of seeds)
   a = some words                          (what goes where {a} is in the prompt or storyboard; b, c ... too)
 
@@ -48,7 +52,7 @@ import re
 import statistics
 import time
 
-from . import rolling_core, rolling_timeline, royale_proxy
+from . import rolling_core, rolling_refmods, rolling_timeline, royale_proxy
 from . import storyboard as storyboard_mod
 
 TAG = "[H3 Rolling Royale]"
@@ -184,6 +188,10 @@ def apply_change(S, key, value, unets, loras, slots):
         if slot["on"] and slot["file"] in ("", "none"):
             raise ValueError(f"lora {i + 1} is on and has no file (pick one on the node, or  lora {i + 1} file = ...)")
         return
+    m = re.fullmatch(r"refmod (\S+?)(?: (look|voice))?", key)
+    if m:
+        rolling_refmods.change(S.get("refmods") or [], m.group(1), m.group(2), value)
+        return
     if key == "model":
         S["model"] = _match(value, unets, "model")
     elif key == "steps":
@@ -293,6 +301,7 @@ def diff_lines(S, base):
         out.append("keystone on" if S.get("keystone") else "keystone off")
     if S.get("attention", "default") != base.get("attention", "default"):
         out.append(f"{S.get('attention', 'default')} attention")
+    out += rolling_refmods.diff(S.get("refmods"), base.get("refmods"))
     for k in sorted(S["slots"]):
         if S["slots"][k] != base["slots"].get(k, ""):
             out.append(f"{{{k}}}: {S['slots'][k] or '(empty)'}")
@@ -375,7 +384,9 @@ def _write(path, data, patience=6.0):
 
 
 def run_royale(clip, vae, audio_vae, prompt, storyboard, arms_text, base, shots, seed, soundtrack, frame_labels,
-               mode, pictures, ref_video=None, ref_audio=None, job=None, origin=None):
+               mode, pictures, ref_video=None, ref_audio=None, job=None, origin=None, mods=None, refmod_weights=None):
+    # mods: a RefMod bundle from a RefMod Stack (rolling_refmods). refmod_weights: the weights a run started
+    # from a take hands over, by name, in place of the stack's own.
     import comfy.model_management as mm
     import folder_paths
     import nodes
@@ -391,6 +402,13 @@ def run_royale(clip, vae, audio_vae, prompt, storyboard, arms_text, base, shots,
     base.setdefault("exact", None)
     resolve_size(base)
     base.update({"slots": dict(slots), "slot_changed": False, "seeds_set": False})
+    mod_groups = rolling_refmods.groups(mods)
+    base["refmods"] = rolling_refmods.state(mod_groups)
+    for r in base["refmods"]:
+        was = next((x for x in refmod_weights or [] if x.get("name") == r["name"]), None)
+        for ch in rolling_refmods.CHANNELS:
+            if was and r[ch] is not None and was.get(ch) is not None:
+                r[ch] = float(was[ch])
     for i, l in enumerate(base["loras"], 1):
         if l["on"] and l["file"] in ("", "none"):
             l["on"] = False
@@ -470,6 +488,11 @@ def run_royale(clip, vae, audio_vae, prompt, storyboard, arms_text, base, shots,
             f"pieces two arms share render once, so the real time is usually less).\n" + "\n".join(rows))
     for x in skipped:
         plan += "\n  left out: " + x
+    if base["refmods"]:
+        loaded_n = sum(1 for p in pictures if p is not None)
+        plan += "\n  RefMods (baseline, with all the media): " + ("; ".join(rolling_refmods.tags(
+            rolling_refmods.rows(mod_groups, base["refmods"]), loaded_n, ref_video is not None, ref_audio is not None))
+            or "all switched off")
     if slots:
         plan += "\n  slots: " + "; ".join(f"{{{s}}} = {v or '(empty)'}" for s, v in sorted(slots.items()))
     print(f"{TAG} {plan}")
@@ -554,7 +577,8 @@ def run_royale(clip, vae, audio_vae, prompt, storyboard, arms_text, base, shots,
                         frame_labels=frame_labels, pictures=pictures, ref_video=ref_video, ref_audio=ref_audio,
                         solo=solo, extra_notes=notes, hold=HOLDS[S["hold"]],
                         piece_cache=False if a["control"] else None, stream_to=os.path.join(folder, name), report=rep,
-                        keystone=S["keystone"])
+                        keystone=S["keystone"],
+                        mods=rolling_refmods.rows(mod_groups, S["refmods"]) if mods is not None else None)
                     del frames
                     secs = time.time() - t0
                     try:  # a small copy for the page's grid; the page falls back to the full file without it
