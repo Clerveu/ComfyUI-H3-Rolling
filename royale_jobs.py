@@ -69,6 +69,7 @@ def build_job(job, manifest, arm_n, take_i, what, arms_text="", mode="run"):
     i["upscale_pass"] = bool(S.get("upscale"))
     i["upscale_megapixels"], i["upscale_steps"], i["upscale_denoise"] = float(S["upscale_mp"]), int(S["upscale_steps"]), float(S["upscale_denoise"])
     i["keystone"] = bool(S.get("keystone", False))
+    i["attention"] = S.get("attention", "default")
     i["mode"] = "plan only" if mode == "plan" else "run"
     base = {}
     if S.get("aspect") and not S.get("exact"):

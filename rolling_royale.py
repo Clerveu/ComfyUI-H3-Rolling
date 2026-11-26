@@ -27,6 +27,7 @@ What a line can change
   upscale = on | off      upscale mp = 1.5     upscale steps = 2     upscale denoise = 0.4
   pictures = match | max
   keystone = on | off                     (shot 1's first frame locked into frame 0 of every later shot)
+  attention = kitchen | default           (kitchen = Comfy's INT8 attention, as Seed Hunter runs; default = the model as loaded)
   seeds = 3                               (this arm's own number of seeds)
   a = some words                          (what goes where {a} is in the prompt or storyboard; b, c ... too)
 
@@ -225,6 +226,8 @@ def apply_change(S, key, value, unets, loras, slots):
         S["ref_image_size"] = value
     elif key == "keystone":
         S["keystone"] = _onoff(value)
+    elif key in ("attention", "attention backend"):
+        S["attention"] = _attention(value)
     elif key == "seeds":
         S["seeds"], S["seeds_set"] = max(1, int(value)), True
     elif re.fullmatch(r"[a-z]", key):
@@ -236,9 +239,21 @@ def apply_change(S, key, value, unets, loras, slots):
         raise ValueError(f"\"{key}\" isn't a setting an arm can change")
 
 
+ATTENTIONS = ("default", "comfy kitchen")
+
+
+def _attention(value):
+    v = value.strip().lower()
+    if v in ("default", "pytorch", "off", "none"):
+        return "default"
+    if "kitchen" in v or v in ("ck", "int8", "on"):
+        return "comfy kitchen"
+    raise ValueError("attention is  kitchen  or  default")
+
+
 def chain_of(S):
     return (S["model"], tuple((l["file"], round(float(l["strength"]), 4)) for l in S["loras"]
-                              if l["on"] and l["file"] not in ("", "none")))
+                              if l["on"] and l["file"] not in ("", "none")), S.get("attention", "default"))
 
 
 def diff_lines(S, base):
@@ -276,6 +291,8 @@ def diff_lines(S, base):
         out.append("upscale on" if S["upscale"] else "upscale off")
     if S.get("keystone", False) != base.get("keystone", False):
         out.append("keystone on" if S.get("keystone") else "keystone off")
+    if S.get("attention", "default") != base.get("attention", "default"):
+        out.append(f"{S.get('attention', 'default')} attention")
     for k in sorted(S["slots"]):
         if S["slots"][k] != base["slots"].get(k, ""):
             out.append(f"{{{k}}}: {S['slots'][k] or '(empty)'}")
@@ -368,6 +385,7 @@ def run_royale(clip, vae, audio_vae, prompt, storyboard, arms_text, base, shots,
     slots = slots_in(prompt, storyboard)
     base = copy.deepcopy(base)
     base.setdefault("keystone", False)
+    base["attention"] = _attention(base.get("attention") or "default")
     if "aspect" not in base:  # an older caller that still hands over a width and a height
         base.update({"aspect": "16:9 (Widescreen)", "mp": 0.4, "exact": [base.pop("width"), base.pop("height")]})
     base.setdefault("exact", None)
@@ -501,6 +519,13 @@ def run_royale(clip, vae, audio_vae, prompt, storyboard, arms_text, base, shots,
         m = model_cache["base"]
         for file, strength in ch[1]:
             m = nodes.LoraLoaderModelOnly().load_lora_model_only(m, file, strength)[0]
+        if ch[2] == "comfy kitchen":  # what the core Model Attention Backend node does for 'comfy kitchen attention'
+            import comfy.ldm.modules.attention as attn
+            fn = attn.get_attention_function("comfy_kitchen_int8", None)
+            if fn is None:
+                raise ValueError("comfy kitchen attention isn't available in this Comfy (it needs an Nvidia or AMD card)")
+            m = m.clone()
+            m.set_model_optimized_attention(fn)
         model_cache["chain"], model_cache["model"] = ch, m
         return m
 

@@ -450,6 +450,10 @@ class H3RollingRoyale:
             "mode": (["run", "plan only"], {"default": "run",
                                             "tooltip": "plan only: list the arms, count the takes and estimate the time, render nothing."}),
             "keystone": ("BOOLEAN", {"default": False, "tooltip": "The baseline's setting; an arm can say keystone = on / off. " + KEYSTONE_TIP}),
+            "attention": (list(rolling_royale.ATTENTIONS), {"default": "default", "tooltip": (
+                "comfy kitchen: Comfy's INT8 attention (the Model Attention Backend node's 'comfy kitchen attention', which Seed Hunter "
+                "has switched on). default: the model as loaded, what every royale before 11-26 used. The baseline's setting; "
+                "an arm can say attention = kitchen / default. The same seed gives a slightly different take under each.")}),
         })
         optional = {f"picture_{i}": ("IMAGE", {"tooltip": f"image {i} in the storyboard, <Picture {i}> in the prompt"})
                     for i in range(1, 10)}
@@ -463,7 +467,8 @@ class H3RollingRoyale:
     def run(self, clip, vae, audio_vae, model, steps, sampler_name, scheduler, prompt, storyboard, arms, shots,
             shot_seconds, bridge_seconds, aspect_ratio, megapixels, seed, seeds_per_arm, ref_image_size, soundtrack,
             upscale_pass, upscale_megapixels, upscale_steps, upscale_denoise, frame_labels, bridge_hold, mode,
-            keystone=False, ref_video=None, ref_audio=None, job_graph=None, node_id=None, extra=None, **kw):
+            keystone=False, attention="default", ref_video=None, ref_audio=None, job_graph=None, node_id=None,
+            extra=None, **kw):
         from . import storyboard as storyboard_mod
         for mod in (rolling_core, rolling_timeline, storyboard_mod, rolling_royale):
             importlib.reload(mod)
@@ -475,7 +480,7 @@ class H3RollingRoyale:
             "shot_seconds": shot_seconds, "bridge_seconds": bridge_seconds, "hold": BRIDGE_HOLDS.get(bridge_hold, (5, 0))[0],
             "upscale": upscale_pass, "upscale_mp": upscale_megapixels, "upscale_steps": upscale_steps,
             "upscale_denoise": upscale_denoise, "ref_image_size": ref_image_size, "seeds": seeds_per_arm,
-            "keystone": bool(keystone),
+            "keystone": bool(keystone), "attention": attention,
         }
         extra = extra if isinstance(extra, dict) else {}
         if (extra.get("h3royale_base") or {}).get("exact"):  # a run started from a take that had an exact size
