@@ -782,7 +782,14 @@ function total() {
 function targetFor(v) { const d = isFinite(v.duration) ? v.duration : 1e9; return Math.min(clock.t, Math.max(0, d - 0.5 / fps())); }
 const abOpen = () => $("ab").classList.contains("open");
 function active() { const ab = abOpen(); return synced.filter((v) => !!v.dataset.ab === ab); }
-function leader() { let best = null; for (const v of active()) if (isFinite(v.duration) && (!best || v.duration > best.duration)) best = v; return best; }
+function longest() { let best = null; for (const v of active()) if (isFinite(v.duration) && (!best || v.duration > best.duration)) best = v; return best; }
+// The clock follows one player and the others keep step with it by running a touch fast or slow. The one it
+// follows is the one you can hear: changing a player's speed, or jumping it, is a click or a gap in its sound,
+// so the heard player is never corrected. With the sound off (or once the heard take has ended) it is the longest.
+function leader() {
+  const heard = active().find((v) => !v.muted && isFinite(v.duration));
+  return heard && clock.t < heard.duration - 0.1 ? heard : longest();
+}
 function seekAll() { for (const v of active()) { try { v.currentTime = targetFor(v) + 0.25 / fps(); } catch (e) {} } readout(); }
 function playAll() { for (const v of active()) { v.playbackRate = clock.rate; if (clock.t < (isFinite(v.duration) ? v.duration : 1e9) - 0.05) v.play().catch(() => {}); } }
 function setPlaying(p) {
@@ -792,18 +799,24 @@ function setPlaying(p) {
 }
 function tick(now) {
   if (clock.playing) {
-    const L = leader();
-    if (L && !L.seeking && L.readyState >= 2) clock.t = L.currentTime;
-    else clock.t += (now - clock.last) / 1000 * clock.rate;
+    const L = leader(), long = longest();
+    if (L && !L.seeking && L.readyState >= 2) { clock.t = L.currentTime; clock.ok = now; }
+    // a leader that is busy for a moment (a jump, a slow frame) holds the clock; the clock runs on its own only
+    // with no leader, or with one that has been stuck for a second
+    else if (!L || now - (clock.ok || 0) > 1000) clock.t += (now - clock.last) / 1000 * clock.rate;
     clock.last = now;
-    const T = L ? L.duration : total();
-    if (T && (clock.t >= T - 0.03 || (L && L.ended))) { clock.t = 0; seekAll(); playAll(); }
+    const T = long ? long.duration : total();
+    if (T && (clock.t >= T - 0.03 || (long && long.ended))) { clock.t = 0; seekAll(); playAll(); }
+    if (L && L.playbackRate !== clock.rate) { L.playbackRate = clock.rate; L._adj = 0; }
     for (const v of active()) {
       if (v === L || v.seeking) continue;
-      const want = targetFor(v), off = v.currentTime - want;
+      const want = targetFor(v), off = v.currentTime - want, far = Math.abs(off);
       if (v.paused && want < v.duration - 0.06) v.play().catch(() => {});
-      if (Math.abs(off) > 0.4) v.currentTime = want;
-      else v.playbackRate = clock.rate * (off > 0.03 ? 0.9 : off < -0.03 ? 1.1 : 1);
+      if (far > 0.4) { v.currentTime = want; v._adj = 0; continue; }
+      // start correcting at 60 ms out and stop once back within 15: no flipping between speeds at the edge
+      if (far > 0.06) v._adj = off > 0 ? -1 : 1; else if (far < 0.015) v._adj = 0;
+      const r = clock.rate * (v._adj < 0 ? 0.92 : v._adj > 0 ? 1.08 : 1);
+      if (v.playbackRate !== r) v.playbackRate = r;
     }
     readout();
   }
