@@ -128,6 +128,7 @@
   <h1>H3 Royale</h1>
   <select id="runs"></select>
   <button id="reload" title="Reload the run list">Reload</button>
+  <button id="towf" style="display:none" title="Save this run's whole setup (model, LoRAs, arms, sizes, prompt, storyboard, pictures) over H3_Rolling_Royale in Comfy's workflow list">Load into workflow</button>
   <label class="legend">size <input id="size" type="range" min="180" max="900" step="20" value="320"></label>
   <span id="status"></span>
   <span id="origin" class="legend"></span>
@@ -229,6 +230,7 @@ async function openRun(id) {
   try { mapBy = localStorage.getItem("royale.by." + id); } catch (e) {}
   $("tnames").value = names().join(", "); $("scoreon").checked = scoreOn();
   hasJob = await fetch(`/h3royale/run/${id}/job.json`).then((r) => r.ok).catch(() => false);
+  $("towf").style.display = hasJob ? "" : "none";
   closeRF();
   man = null;
   await refresh(true);
@@ -688,6 +690,86 @@ async function planRF() {
   } catch (e) { out.textContent = e.message; }
 }
 
+// ------------------------------------------------------------ a run's setup back into the workflow
+// job.json is the job as Comfy ran it: every node that fed the Royale node, with every box's value. Comfy's own
+// description of each node (/object_info) gives the order of the boxes, which is all a workflow file adds.
+const WF_NAME = "H3_Rolling_Royale";
+const BOXES = new Set(["INT", "FLOAT", "STRING", "BOOLEAN", "COMBO"]);
+async function jobToWorkflow(job) {
+  const P = job.prompt, me = String(job.node_id);
+  const isLink = (v) => Array.isArray(v) && v.length === 2 && typeof v[1] === "number" && P[String(v[0])] !== undefined;
+  const feeds = (id) => Object.values(P[id].inputs || {}).filter(isLink).map((v) => String(v[0]));
+  const keep = new Set([me]);
+  for (let grew = true; grew;) { grew = false;
+    for (const id of Object.keys(P)) {
+      if (!keep.has(id) && feeds(id).includes(me)) { keep.add(id); grew = true; }          // what shows its report
+      if (keep.has(id)) for (const f of feeds(id)) if (!keep.has(f)) { keep.add(f); grew = true; }
+    }
+  }
+  const info = {};
+  for (const id of keep) {
+    const t = P[id].class_type; if (info[t]) continue;
+    const d = await (await fetch(`/object_info/${encodeURIComponent(t)}`)).json().catch(() => ({}));
+    if (!d[t]) throw new Error(`This run used a node Comfy doesn't have any more: ${t}`);
+    info[t] = d[t];
+  }
+  const nodes = {}, links = []; let lid = 0, order = 0;
+  for (const id of [...keep].sort((a, b) => a - b)) {
+    const n = P[id], I = info[n.class_type], inputs = [], boxes = [];
+    for (const grp of ["required", "optional"]) for (const [name, spec] of Object.entries((I.input || {})[grp] || {})) {
+      const opts = spec[1] || {}, combo = Array.isArray(spec[0]), box = (combo || BOXES.has(spec[0])) && !opts.forceInput;
+      const v = (n.inputs || {})[name], wired = isLink(v);
+      if (!box || wired) inputs.push({ name, type: combo ? "COMBO" : spec[0], link: null, ...(grp === "optional" ? { shape: 7 } : {}), ...(box ? { widget: { name } } : {}), src: wired ? v : null });
+      if (!box) continue;
+      const dflt = combo ? (opts.default ?? spec[0][0] ?? "") : spec[0] === "COMBO" ? (opts.default ?? (opts.options || [""])[0]) : (opts.default ?? { INT: 0, FLOAT: 0, STRING: "", BOOLEAN: false }[spec[0]]);
+      boxes.push(wired || v === undefined ? dflt : v);
+      if (opts.control_after_generate) boxes.push("fixed");
+      if (opts.image_upload) boxes.push("image");
+    }
+    const node = { id: +id, type: n.class_type, pos: null, size: [320, 120], flags: {}, order: order++, mode: 0, inputs,
+      outputs: (I.output || []).map((t, i) => ({ name: (I.output_name || [])[i] || String(t), type: Array.isArray(t) ? "COMBO" : t, links: [], slot_index: i })),
+      properties: { "Node name for S&R": n.class_type }, widgets_values: boxes };
+    const title = n._meta && n._meta.title; if (title && title !== I.display_name && title !== n.class_type) node.title = title;
+    nodes[id] = node;
+  }
+  for (const node of Object.values(nodes)) node.inputs.forEach((inp, di) => {
+    const v = inp.src; delete inp.src; if (!v) return;
+    const from = nodes[String(v[0])]; if (!from || !from.outputs[v[1]]) return;
+    lid++; from.outputs[v[1]].links.push(lid); inp.link = lid; links.push([lid, from.id, v[1], node.id, di, from.outputs[v[1]].type]);
+  });
+  // where things sit: the same places the stock workflow uses
+  const all = Object.values(nodes), royale = nodes[me];
+  const into = (name) => { const i = royale.inputs.find((x) => x.name === name), l = i && links.find((x) => x[0] === i.link); return l ? nodes[String(l[1])] : null; };
+  const put = (n, pos, size) => { if (n && !n.pos) { n.pos = pos; n.size = size; } };
+  const media = all.find((n) => n.type === "MiniMaxH3MediaLoader"), top = media ? 810 : 370;
+  put(into("clip"), [0, 260], [420, 106]); put(into("vae"), [0, 410], [420, 58]); put(into("audio_vae"), [0, 510], [420, 58]);
+  put(media, [460, 0], [1000, 760]); put(all.find((n) => n.type === "MiniMaxH3ReferenceSplitter"), [1480, 0], [252, 372]);
+  all.filter((n) => n.type === "H3RollingPicture").forEach((n, k) => put(n, [460 + 260 * k, 0], [250, 320]));
+  put(royale, [460, top], [820, 1500]);
+  all.filter((n) => n.type === "PreviewAny").forEach((n, k) => put(n, [1320, top + 560 * k], [520, 520]));
+  let y = 0; for (const n of all) if (!n.pos) { n.pos = [-420, y]; y += 180; }
+  // the how-to note isn't part of a job; keep the one in the workflow that's there now
+  try {
+    const cur = await (await fetch(`/userdata/${encodeURIComponent("workflows/" + WF_NAME + ".json")}`)).json();
+    let next = Math.max(...all.map((n) => n.id));
+    for (const n of (cur.nodes || [])) if (n.type === "MarkdownNote") all.push({ ...n, id: ++next, order: order++, inputs: [], outputs: [] });
+  } catch (e) {}
+  const hex = (n) => [...Array(n)].map(() => Math.floor(Math.random() * 16).toString(16)).join("");
+  return { id: `${hex(8)}-${hex(4)}-4${hex(3)}-a${hex(3)}-${hex(12)}`, revision: 0, last_node_id: Math.max(...all.map((n) => n.id)), last_link_id: lid,
+    nodes: all, links, groups: [], config: {}, extra: { ds: { scale: 0.7, offset: [60, 60] } }, version: 0.4 };
+}
+async function loadIntoWorkflow() {
+  const id = runId;
+  try {
+    say("Building the workflow from this run...");
+    const job = await (await fetch(`/h3royale/run/${id}/job.json`)).json();
+    const wf = await jobToWorkflow(job);
+    const r = await fetch(`/userdata/${encodeURIComponent("workflows/" + WF_NAME + ".json")}?overwrite=true`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(wf) });
+    if (!r.ok) throw new Error(`Comfy wouldn't save the workflow (it said ${r.status})`);
+    say(`${WF_NAME} now holds run ${id.replace("_", " ")}. Open it from Comfy's workflow list; if it's already open there, close it and open it again.`);
+  } catch (e) { say(e.message, true); }
+}
+
 // ------------------------------------------------------------ one clock for every player
 const fps = () => (man && man.fps) || 24;
 function refTake() { const k = sel[0] && cells[sel[0]] ? sel[0] : Object.keys(cells).find((x) => cells[x].video); return k ? cells[k].take : null; }
@@ -777,6 +859,7 @@ $("mapnotes").onchange = (e) => { e.target.blur(); drawMap(); };
 const setSize = (w) => { document.documentElement.style.setProperty("--w", w + "px"); try { localStorage.setItem("royale.w", w); } catch (e) {} };
 try { const w = localStorage.getItem("royale.w"); if (w) { $("size").value = w; setSize(w); } } catch (e) {}
 $("size").oninput = (e) => setSize(e.target.value);
+$("towf").onclick = loadIntoWorkflow;
 $("reload").onclick = () => loadRuns(runId).then(() => refresh(false));
 $("play").onclick = () => setPlaying(!clock.playing);
 $("back").onclick = () => step(-1); $("fwd").onclick = () => step(1);
