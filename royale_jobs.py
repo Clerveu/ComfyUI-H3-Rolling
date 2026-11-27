@@ -70,6 +70,7 @@ def build_job(job, manifest, arm_n, take_i, what, arms_text="", mode="run"):
     i["upscale_megapixels"], i["upscale_steps"], i["upscale_denoise"] = float(S["upscale_mp"]), int(S["upscale_steps"]), float(S["upscale_denoise"])
     i["keystone"] = bool(S.get("keystone", False))
     i["attention"] = S.get("attention", "default")
+    i["shift"], i["audio_shift"] = float(S.get("shift", 12.0)), float(S.get("audio_shift", 3.0))
     i["mode"] = "plan only" if mode == "plan" else "run"
     base = {}
     if S.get("refmods"):  # the take's RefMod weights, handed over beside the job: the stack in it has the old baseline's

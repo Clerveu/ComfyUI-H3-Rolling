@@ -28,6 +28,7 @@ What a line can change
   pictures = match | max
   keystone = on | off                     (shot 1's first frame locked into frame 0 of every later shot)
   attention = kitchen | default           (kitchen = Comfy's INT8 attention, as Seed Hunter runs; default = the model as loaded)
+  shift = 6 | 12          audio shift = 3 | 6     (where the steps are spent; 12 and 3 are H3's own and leave the model untouched)
   refmod 1 look = 0.6     refmod 1 voice = 0      refmod 1 = off | on | 0.8
                                           (a RefMod from the stack wired into mods, by its place in the stack or by
                                            name: refmod mira look = 0.6. Up to 1 is strength, above 1 adds copies,
@@ -236,6 +237,10 @@ def apply_change(S, key, value, unets, loras, slots):
         S["keystone"] = _onoff(value)
     elif key in ("attention", "attention backend"):
         S["attention"] = _attention(value)
+    elif key in ("shift", "video shift"):
+        S["shift"] = _shift(value, "shift")
+    elif key == "audio shift":
+        S["audio_shift"] = _shift(value, "audio shift")
     elif key == "seeds":
         S["seeds"], S["seeds_set"] = max(1, int(value)), True
     elif re.fullmatch(r"[a-z]", key):
@@ -248,6 +253,26 @@ def apply_change(S, key, value, unets, loras, slots):
 
 
 ATTENTIONS = ("default", "comfy kitchen")
+SHIFTS = (12.0, 3.0)  # H3's own video and audio shift (comfy/supported_models.py); at these the model is left as loaded
+
+
+def _shift(value, what):
+    try:
+        v = float(value)
+    except ValueError:
+        raise ValueError(f"{what} is a number (H3's own is {SHIFTS[0]:g} for the picture and {SHIFTS[1]:g} for the sound)")
+    if not 0.01 <= v <= 100:
+        raise ValueError(f"{what} is between 0.01 and 100")
+    return v
+
+
+def with_shift(model, S):
+    """The model with this arm's shifts, by Comfy's own ModelSamplingMiniMaxH3 node. H3's own values = no change."""
+    sv, sa = float(S.get("shift", SHIFTS[0])), float(S.get("audio_shift", SHIFTS[1]))
+    if (sv, sa) == SHIFTS:
+        return model
+    from comfy_extras.nodes_minimax_h3 import MiniMaxH3SigmaShift
+    return MiniMaxH3SigmaShift.execute(model, sv, sa).args[0]
 
 
 def _attention(value):
@@ -301,6 +326,9 @@ def diff_lines(S, base):
         out.append("keystone on" if S.get("keystone") else "keystone off")
     if S.get("attention", "default") != base.get("attention", "default"):
         out.append(f"{S.get('attention', 'default')} attention")
+    for key, word, own in (("shift", "shift", SHIFTS[0]), ("audio_shift", "audio shift", SHIFTS[1])):
+        if float(S.get(key, own)) != float(base.get(key, own)):
+            out.append(f"{word} {float(S.get(key, own)):g}")
     out += rolling_refmods.diff(S.get("refmods"), base.get("refmods"))
     for k in sorted(S["slots"]):
         if S["slots"][k] != base["slots"].get(k, ""):
@@ -397,6 +425,8 @@ def run_royale(clip, vae, audio_vae, prompt, storyboard, arms_text, base, shots,
     base = copy.deepcopy(base)
     base.setdefault("keystone", False)
     base["attention"] = _attention(base.get("attention") or "default")
+    base["shift"], base["audio_shift"] = (_shift(base.get("shift", SHIFTS[0]), "shift"),
+                                          _shift(base.get("audio_shift", SHIFTS[1]), "audio shift"))
     if "aspect" not in base:  # an older caller that still hands over a width and a height
         base.update({"aspect": "16:9 (Widescreen)", "mp": 0.4, "exact": [base.pop("width"), base.pop("height")]})
     base.setdefault("exact", None)
@@ -566,7 +596,7 @@ def run_royale(clip, vae, audio_vae, prompt, storyboard, arms_text, base, shots,
                 t0 = time.time()
                 rep = {}
                 try:
-                    model = model_for(S)
+                    model = with_shift(model_for(S), S)
                     tl, p_text, solo, notes = timeline_for(S, take_seed)
                     frames, _, take_plan = rolling_timeline.run_timeline(
                         model, clip, vae, audio_vae, tl, p_text, "", round(S["shot_seconds"] * rolling_core.FPS),

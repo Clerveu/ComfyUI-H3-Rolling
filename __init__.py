@@ -387,12 +387,13 @@ ARMS_TIP = """The node's own settings are the baseline. Each line here is one mo
   cross: steps = 4 | 6; lora 1 strength = 0.8 | 1.0     two sweeps, every combination
   a = locked-off tripod shot | (empty)          what goes where {a} is in the prompt or storyboard
   refmod 1 look = 0.6 | 1.0                     a RefMod from the stack wired into mods (by place or name)
+  shift = 6 | 12                                where the steps are spent (12 = H3's own); audio shift = 3 | 6
   control                                       the baseline again with the piece cache off
   # a note
 
 Settings: model, lora N (on / off / a strength), lora N strength, lora N file, steps, sampler, scheduler,
 mp (megapixels), aspect (9:16), size (an exact 1024x576), shot seconds, bridge seconds, hold (5 / 22), upscale (on / off), upscale mp, upscale steps,
-upscale denoise, pictures (match / max), keystone, attention, refmod N (on / off / a weight), refmod N look, refmod N voice,
+upscale denoise, pictures (match / max), keystone, attention, shift, audio shift, refmod N (on / off / a weight), refmod N look, refmod N voice,
 seeds, and any slot letter.
 
 {a: handheld, slight sway} in the prompt is a slot with the words the baseline uses. An arm that sets a slot runs on at least 3 seeds unless its line says seeds = N."""
@@ -463,6 +464,12 @@ class H3RollingRoyale:
                 "comfy kitchen: Comfy's INT8 attention (the Model Attention Backend node's 'comfy kitchen attention', which Seed Hunter "
                 "has switched on). default: the model as loaded, what every royale before 11-26 used. The baseline's setting; "
                 "an arm can say attention = kitchen / default. The same seed gives a slightly different take under each.")}),
+            "shift": ("FLOAT", {"default": 12.0, "min": 0.01, "max": 100.0, "step": 0.5, "tooltip": (
+                "Where the steps are spent. Higher: more of them on layout and motion. Lower: more on fine detail. 12 is H3's own "
+                "(with audio_shift at 3 the model is left untouched). LoRA authors use 12 with about 18 steps and no turbo, 6 with "
+                "8 to 12 steps and turbo. An arm can say shift = 6 | 12.")}),
+            "audio_shift": ("FLOAT", {"default": 3.0, "min": 0.01, "max": 100.0, "step": 0.5,
+                                      "tooltip": "The same for the sound. 3 is H3's own. An arm can say audio shift = 3 | 6."}),
         })
         optional = {f"picture_{i}": ("IMAGE", {"tooltip": f"image {i} in the storyboard, <Picture {i}> in the prompt"})
                     for i in range(1, 10)}
@@ -477,7 +484,8 @@ class H3RollingRoyale:
     def run(self, clip, vae, audio_vae, model, steps, sampler_name, scheduler, prompt, storyboard, arms, shots,
             shot_seconds, bridge_seconds, aspect_ratio, megapixels, seed, seeds_per_arm, ref_image_size, soundtrack,
             upscale_pass, upscale_megapixels, upscale_steps, upscale_denoise, frame_labels, bridge_hold, mode,
-            keystone=False, attention="default", ref_video=None, ref_audio=None, mods=None, job_graph=None, node_id=None,
+            keystone=False, attention="default", shift=12.0, audio_shift=3.0, ref_video=None, ref_audio=None, mods=None,
+            job_graph=None, node_id=None,
             extra=None, **kw):
         from . import storyboard as storyboard_mod
         for mod in (rolling_core, rolling_refmods, rolling_timeline, storyboard_mod, rolling_royale):
@@ -490,7 +498,7 @@ class H3RollingRoyale:
             "shot_seconds": shot_seconds, "bridge_seconds": bridge_seconds, "hold": BRIDGE_HOLDS.get(bridge_hold, (5, 0))[0],
             "upscale": upscale_pass, "upscale_mp": upscale_megapixels, "upscale_steps": upscale_steps,
             "upscale_denoise": upscale_denoise, "ref_image_size": ref_image_size, "seeds": seeds_per_arm,
-            "keystone": bool(keystone), "attention": attention,
+            "keystone": bool(keystone), "attention": attention, "shift": float(shift), "audio_shift": float(audio_shift),
         }
         extra = extra if isinstance(extra, dict) else {}
         if (extra.get("h3royale_base") or {}).get("exact"):  # a run started from a take that had an exact size
