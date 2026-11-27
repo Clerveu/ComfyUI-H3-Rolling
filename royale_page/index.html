@@ -83,15 +83,22 @@
   .thumbs button.up.on { border-color:var(--good); background:#1f3a29; }
   .thumbs button.down.on { border-color:var(--bad); background:#3d2020; }
   #ab .rvonly { display:none; } #ab.rv .rvonly { display:inline-block; } #ab.rv .abonly { display:none; }
-  #rvrate { display:flex; gap:14px; align-items:center; padding:8px 0 2px; }
-  #rvrate .thumbs { margin:0; font-size:14px; gap:6px 18px; color:var(--text); flex-wrap:nowrap; }
-  #rvrate .thumbs button { font-size:17px; padding:3px 12px; }
-  #rvrate input { flex:1; min-width:120px; padding:6px 10px; }
+  .rvrate { display:flex; gap:14px; align-items:center; padding:8px 0 2px; }
+  .rvrate .thumbs { margin:0; font-size:14px; gap:6px 18px; color:var(--text); flex-wrap:nowrap; }
+  .rvrate .thumbs button { font-size:17px; padding:3px 12px; }
+  .rvrate input { flex:1; min-width:120px; padding:6px 10px; }
+  .rvrate .nav { padding:3px 11px; font-size:15px; font-weight:700; }
+  #ab:not(.rv) .rvrate { flex-wrap:wrap; gap:8px 12px; } #ab:not(.rv) .rvrate .thumbs { flex-wrap:wrap; }
+  #abstage .pane .cap .lock { font-size:11px; padding:1px 8px; margin-left:10px; opacity:.6; }
+  #abstage .pane .cap .lock.on { opacity:1; border-color:var(--accent); color:var(--accent); }
+  #abstage .pane .cap .ear { display:none; margin-left:8px; } #ab:not(.rv) #abstage .pane.heard .cap .ear { display:inline; }
+  #ab:not(.rv) #abstage:not(.flip) .pane.heard video { outline:2px solid var(--accent); outline-offset:-2px; }
+  #ab:not(.rv) #abstage:not(.flip) video { cursor:pointer; }
   .score { display:flex; gap:2px; }
   .cell .score { flex-basis:100%; }
   .score button { flex:1; min-width:0; padding:1px 0; font-size:11px; opacity:.6; }
   .score button.on { opacity:1; color:#fff; text-shadow:0 1px 2px rgba(0,0,0,.85); border-color:#fff; font-weight:700; }
-  #rvrate .score button { font-size:14px; padding:4px 9px; }
+  .rvrate .score button { font-size:14px; padding:4px 9px; }
   .chip.sc { color:#fff; text-shadow:0 1px 2px rgba(0,0,0,.85); font:700 10px/1 system-ui, sans-serif; display:flex; align-items:center; justify-content:center; }
   #review { padding:10px 16px 0; }
   #review .rrow { display:flex; gap:10px; align-items:center; flex-wrap:wrap; font-size:13px; color:var(--dim); }
@@ -155,9 +162,7 @@
   <div id="abtop">
     <button id="abmode" class="abonly">Flip in place (F)</button>
     <button id="abswap" class="abonly" style="display:none">Show the other (F)</button>
-    <span class="legend abonly">Click any two takes in the grid to change A and B.</span>
-    <button id="rvprev" class="rvonly" title="Previous take (up arrow)">&#9650; previous take</button>
-    <button id="rvnext" class="rvonly" title="Next take (down arrow)">next take &#9660;</button>
+    <span class="legend abonly">&#128274; = the side that stays (L swaps it). &lt; &gt; or &uarr; &darr; change the other side. Click a side to hear it.</span>
     <span id="rvpos" class="legend rvonly"></span>
     <button id="abclose" style="margin-left:auto">Close (Esc)</button>
   </div>
@@ -189,7 +194,7 @@
     <span class="legend"><span><span class="sw" style="background:var(--shot)"></span>shot</span>
       <span><span class="sw" style="background:var(--bridge)"></span>bridge</span>
       <span><span class="sw" style="background:var(--held)"></span>frames a bridge holds from its shots</span></span>
-    <span class="keys">space play &middot; , . frame &middot; [ ] join &middot; enter A/B &middot; F flip &middot; R review, &uarr; &darr; take &middot; M mute</span>
+    <span class="keys">space play &middot; , . frame &middot; [ ] join &middot; enter A/B (&uarr; &darr; other side, L lock) &middot; F flip &middot; R review, &uarr; &darr; take &middot; M mute</span>
   </div>
   <div id="scrub"><div id="head"></div></div>
 </div>
@@ -374,7 +379,7 @@ function setThumb(key, name, val) {
 function paintThumbs(key) {
   const c = cells[key]; if (!c || !c.video) return;
   fillThumbs(c.el.querySelector(".thumbs"), key);
-  if (rvKey === key) fillThumbs(document.querySelector("#rvrate .thumbs"), key);
+  for (const r of document.querySelectorAll(".rvrate")) if (r.dataset.k === key) fillThumbs(r.querySelector(".thumbs"), key);
 }
 function fillThumbs(box, key) {
   if (!box) return;
@@ -543,6 +548,7 @@ function paintSel0() { for (const ch of document.querySelectorAll("#map .chip"))
 
 // ------------------------------------------------------------ selection, sound, A/B
 function pick(key) {
+  if (abOpen() && !rvKey && sel.length === 2) { if (key !== sel[abLock] && key !== sel[1 - abLock]) setPane(1 - abLock, key); return; }
   if (!sel.includes(key)) sel = sel.length < 2 ? [...sel, key] : [sel[1], key];
   lastHeard = key;
   paintSel(); drawScrub(); if ($("ab").classList.contains("open")) openAB();
@@ -572,7 +578,8 @@ function applySound() {
   const heard = ab ? null : (lastHeard && cells[lastHeard] ? lastHeard : sel[0]);
   for (const [k, c] of Object.entries(cells)) if (c.video) c.video.muted = k !== heard;
   const panes = [...document.querySelectorAll("#abstage video")];
-  panes.forEach((v, i) => { v.muted = !(ab && i === (abFlip ? abShow : 0)); });
+  const heard2 = rvKey ? 0 : abFlip ? abShow : abHeard;
+  panes.forEach((v, i) => { v.muted = !(ab && i === heard2); v.closest(".pane").classList.toggle("heard", ab && i === heard2); });
 }
 function label(k) { const c = cells[k]; return `arm ${c.arm.n}: ${c.arm.n === 0 ? "baseline" : (c.arm.diff || []).join(" | ")} - seed ${c.take.seed}`; }
 
@@ -584,6 +591,59 @@ function clearStage() {
   for (const v of document.querySelectorAll("#abstage video")) release(v);
   $("abstage").innerHTML = "";
 }
+// The row under a big player: the take's thumbs and 0-10, then (if given) < > buttons, then its note.
+// nav = {prev, next}: what each button does, or null where there is nowhere to go.
+function rateBox(key, nav) {
+  const c = cells[key], rate = document.createElement("div"); rate.className = "rvrate"; rate.dataset.k = key;
+  rate.innerHTML = `<div class="thumbs"></div>` + (nav ? `<button class="nav prev" title="Previous take (up arrow)">&lt;</button><button class="nav next" title="Next take (down arrow)">&gt;</button>` : "") + `<input placeholder="note">`;
+  const note = rate.querySelector("input"), tile = c.el.querySelector(".meta input");
+  note.value = (votes[key] || {}).note || "";
+  note.oninput = () => { entry(key).note = note.value; if (tile) tile.value = note.value; saveVotes(); mapSoon(); };
+  note.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter" || e.key === "Escape") note.blur(); };
+  if (nav) {
+    const [pv, nx] = rate.querySelectorAll(".nav");
+    pv.disabled = !nav.prev; nx.disabled = !nav.next; pv.onclick = nav.prev; nx.onclick = nav.next;
+  }
+  fillThumbs(rate.querySelector(".thumbs"), key);
+  return rate;
+}
+// A/B. One side is kept (the lock, A to start with: the baseline you compare against) and the other is the
+// one that changes: its < > buttons, the up / down arrows, or a click on a take all load a new take into it
+// without touching the kept side's player. abHeard is the side whose sound plays when they are side by side.
+let abLock = 0, abHeard = 0;
+const abOthers = () => rvOrder().filter((k) => k !== sel[abLock]);
+function abPlayer(k, i) {
+  const v = document.createElement("video"); v.src = cells[k].video.dataset.full; v.muted = true; v.playsInline = true; v.preload = "auto"; v.dataset.ab = "1";
+  v.onclick = () => { if (!abFlip) { abHeard = i; applySound(); } };
+  return v;
+}
+// the caption and the rating row around a pane's player (rebuilt when its take or the lock changes)
+function dressPane(pane, i) {
+  const k = sel[i], kept = i === abLock;
+  pane.querySelectorAll(".cap, .rvrate").forEach((e) => e.remove());
+  const cap = document.createElement("div"); cap.className = "cap";
+  cap.innerHTML = `<b>${"AB"[i]}</b> ${esc(label(k))}<button class="lock${kept ? " on" : ""}" title="${kept ? "This side stays while you step through the other (L swaps which side stays)" : "Keep this side and step through the other instead (L)"}">${kept ? "&#128274; stays" : "&#128275;"}</button><span class="ear" title="This side's sound is the one playing">&#128266;</span>`;
+  cap.querySelector(".lock").onclick = () => setLock(i);
+  let nav = null;
+  if (!kept) { const ks = abOthers(), at = ks.indexOf(k); nav = { prev: at > 0 ? () => abStep(-1) : null, next: at < ks.length - 1 ? () => abStep(1) : null }; }
+  pane.prepend(cap); pane.appendChild(rateBox(k, nav));
+}
+function setLock(i) { abLock = i; document.querySelectorAll("#abstage .pane").forEach((p, j) => dressPane(p, j)); }
+function setPane(i, k) {
+  const pane = document.querySelectorAll("#abstage .pane")[i]; if (!pane || !cells[k]) return;
+  const old = pane.querySelector("video");
+  synced = synced.filter((v) => v !== old); release(old);
+  sel[i] = k; lastHeard = k;
+  const v = abPlayer(k, i); old.replaceWith(v); synced.push(v);
+  dressPane(pane, i); paintSel(); drawScrub();     // paintSel also sets whose sound plays
+  // the clock's tick brings the new player into step with the kept one and starts it if they are playing
+  v.addEventListener("loadedmetadata", () => { try { v.currentTime = targetFor(v); v.playbackRate = clock.rate; if (clock.playing) v.play().catch(() => {}); } catch (e) {} }, { once: true });
+}
+function abStep(d) {
+  if (!abOpen() || rvKey || sel.length < 2) return;
+  const i = 1 - abLock, ks = abOthers(), k = ks[ks.indexOf(sel[i]) + d];
+  if (k) setPane(i, k);
+}
 function openAB() {
   if (sel.length < 2) { $("status").textContent = "Click two takes first, then A / B."; return; }
   rvKey = null; $("ab").classList.remove("rv");
@@ -591,9 +651,9 @@ function openAB() {
   const stage = $("abstage"); stage.classList.toggle("flip", abFlip);
   sel.forEach((k, i) => {
     const pane = document.createElement("div"); pane.className = "pane " + "AB"[i] + (abFlip && i !== abShow ? " hide" : "");
-    pane.innerHTML = `<div class="cap"><b>${"AB"[i]}</b> ${esc(label(k))}</div>`;
-    const v = document.createElement("video"); v.src = cells[k].video.dataset.full; v.muted = true; v.playsInline = true; v.preload = "auto"; v.dataset.ab = "1";
+    const v = abPlayer(k, i);
     pane.appendChild(v); stage.appendChild(pane); synced.push(v);
+    dressPane(pane, i);
   });
   $("ab").classList.add("open");
   $("abmode").textContent = abFlip ? "Side by side (S)" : "Flip in place (S)";
@@ -620,16 +680,12 @@ function openRV(key) {
   pane.innerHTML = `<div class="cap">${esc(label(key))}</div>`;
   const v = document.createElement("video"); v.src = c.video.dataset.full; v.muted = true; v.playsInline = true; v.preload = "auto"; v.dataset.ab = "1";
   v.onclick = () => setPlaying(!clock.playing);
-  const rate = document.createElement("div"); rate.id = "rvrate"; rate.innerHTML = `<div class="thumbs"></div><input placeholder="note">`;
-  const note = rate.querySelector("input"), tile = c.el.querySelector(".meta input");
-  note.value = (votes[key] || {}).note || "";
-  note.oninput = () => { entry(key).note = note.value; if (tile) tile.value = note.value; saveVotes(); mapSoon(); };
-  note.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter" || e.key === "Escape") note.blur(); };
+  // < and > sit between the 0-10 row and the note: previous take, next take (no words on them; the tooltip says)
+  const rate = rateBox(key, { prev: i > 0 ? () => rvStep(-1) : null, next: i < ks.length - 1 ? () => rvStep(1) : null });
+  rate.id = "rvrate"; rate.querySelector(".prev").id = "rvprev"; rate.querySelector(".next").id = "rvnext";
   pane.append(v, rate); stage.appendChild(pane); synced.push(v);
-  fillThumbs(rate.querySelector(".thumbs"), key);
   $("ab").classList.add("open", "rv");
   $("rvpos").textContent = `take ${i + 1} of ${ks.length}`;
-  $("rvprev").disabled = i === 0; $("rvnext").disabled = i === ks.length - 1;
   for (const g of synced) if (!g.dataset.ab) g.pause();
   clock.t = 0; paintSel(); drawScrub();
   setPlaying(fresh ? true : clock.playing);
@@ -818,6 +874,8 @@ function tick(now) {
     const T = long ? long.duration : total();
     if (T && (clock.t >= T - 0.03 || (long && long.ended))) { clock.t = 0; seekAll(); playAll(); }
     if (L && L.playbackRate !== clock.rate) { L.playbackRate = clock.rate; L._adj = 0; }
+    // a player that has only just been loaded (a new side in A/B) can be the leader before anything has started it
+    if (L && L.paused && !L.ended && L.readyState >= 2 && clock.t < L.duration - 0.06) L.play().catch(() => {});
     for (const v of active()) {
       if (v === L || v.seeking) continue;
       const want = targetFor(v), off = v.currentTime - want, far = Math.abs(off);
@@ -897,7 +955,7 @@ $("mute").onclick = () => setSound(sound.vol === 0 ? { off: false, vol: 0.5 } : 
 $("vol").oninput = (e) => setSound({ vol: +e.target.value, off: false });
 $("vol").onchange = (e) => e.target.blur();
 $("abopen").onclick = openAB; $("abclose").onclick = closeAB; $("abswap").onclick = flip;
-$("rvopen").onclick = () => openRV(lastHeard || sel[0]); $("rvprev").onclick = () => rvStep(-1); $("rvnext").onclick = () => rvStep(1);
+$("rvopen").onclick = () => openRV(lastHeard || sel[0]);
 $("abmode").onclick = () => { abFlip = !abFlip; abShow = 0; openAB(); };
 let dragging = false;
 const scrubTo = (e) => { const r = $("scrub").getBoundingClientRect(); gotoFrame(Math.round(Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) * total() * fps())); };
@@ -917,6 +975,9 @@ document.onkeydown = (e) => {
   else if (k === "r" || k === "R") { rvKey ? closeAB() : openRV(lastHeard || sel[0]); }
   else if (rvKey && (k === "ArrowDown" || k === "PageDown")) { e.preventDefault(); rvStep(1); }
   else if (rvKey && (k === "ArrowUp" || k === "PageUp")) { e.preventDefault(); rvStep(-1); }
+  else if (abOpen() && (k === "ArrowDown" || k === "PageDown")) { e.preventDefault(); abStep(1); }
+  else if (abOpen() && (k === "ArrowUp" || k === "PageUp")) { e.preventDefault(); abStep(-1); }
+  else if (abOpen() && !rvKey && (k === "l" || k === "L")) setLock(1 - abLock);
   else if (k === "Escape") closeAB();
   else if (k === "f" || k === "F") flip();
   else if (k === "s" || k === "S") { if ($("ab").classList.contains("open") && !rvKey) { abFlip = !abFlip; abShow = 0; openAB(); } }
