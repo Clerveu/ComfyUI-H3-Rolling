@@ -50,6 +50,10 @@ function sweep(root) {
 app.registerExtension({
   name: "H3Rolling.RoyaleBoxes",
   setup() {
+    // code blocks in Markdown notes (the How To) wrap instead of scrolling sideways
+    const css = document.createElement("style");
+    css.textContent = ".comfy-markdown-content pre, .comfy-markdown-content pre code { white-space: pre-wrap; overflow-wrap: anywhere; }";
+    document.head.appendChild(css);
     new MutationObserver((muts) => { for (const m of muts) m.addedNodes.forEach(sweep); })
       .observe(document.body, { childList: true, subtree: true });
     sweep(document.body);
