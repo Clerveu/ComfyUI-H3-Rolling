@@ -393,7 +393,8 @@ ARMS_TIP = """The node's own settings are the baseline. Each line here is one mo
 
 Settings: model, lora N (on / off / a strength), lora N strength, lora N file, steps, sampler, scheduler,
 mp (megapixels), aspect (9:16), size (an exact 1024x576), shot seconds, bridge seconds, hold (5 / 22), upscale (on / off), upscale mp, upscale steps,
-upscale denoise, pictures (match / max), keystone, attention, shift, audio shift, refmod N (on / off / a weight), refmod N look, refmod N voice,
+upscale denoise, pictures (match / max), keystone, attention, shift, audio shift, encoder (the text encoder file),
+refmod pictures (every 4th / all), refmod N (on / off / a weight), refmod N look, refmod N voice,
 seeds, and any slot letter.
 
 {a: handheld, slight sway} in the prompt is a slot with the words the baseline uses. An arm that sets a slot runs on at least 3 seeds unless its line says seeds = N."""
@@ -470,6 +471,11 @@ class H3RollingRoyale:
                 "8 to 12 steps and turbo. An arm can say shift = 6 | 12.")}),
             "audio_shift": ("FLOAT", {"default": 3.0, "min": 0.01, "max": 100.0, "step": 0.5,
                                       "tooltip": "The same for the sound. 3 is H3's own. An arm can say audio shift = 3 | 6."}),
+            "refmod_pictures": (list(rolling_royale.STACK_PICTURES), {"default": "every 4th", "tooltip": (
+                "For a RefMod made from several pictures: how many of them H3's text encoder (the part that reads the prompt "
+                "and works out who is who) is shown. every 4th: the first and every fourth after it, so one picture of a "
+                "three-picture RefMod (the pack's default, and what every run before 11-27 used). all: every picture; a "
+                "little slower. The model itself always gets all of them. An arm can say refmod pictures = every 4th | all.")}),
         })
         optional = {f"picture_{i}": ("IMAGE", {"tooltip": f"image {i} in the storyboard, <Picture {i}> in the prompt"})
                     for i in range(1, 10)}
@@ -484,7 +490,8 @@ class H3RollingRoyale:
     def run(self, clip, vae, audio_vae, model, steps, sampler_name, scheduler, prompt, storyboard, arms, shots,
             shot_seconds, bridge_seconds, aspect_ratio, megapixels, seed, seeds_per_arm, ref_image_size, soundtrack,
             upscale_pass, upscale_megapixels, upscale_steps, upscale_denoise, frame_labels, bridge_hold, mode,
-            keystone=False, attention="default", shift=12.0, audio_shift=3.0, ref_video=None, ref_audio=None, mods=None,
+            keystone=False, attention="default", shift=12.0, audio_shift=3.0, refmod_pictures="every 4th",
+            ref_video=None, ref_audio=None, mods=None,
             job_graph=None, node_id=None,
             extra=None, **kw):
         from . import storyboard as storyboard_mod
@@ -499,6 +506,7 @@ class H3RollingRoyale:
             "upscale": upscale_pass, "upscale_mp": upscale_megapixels, "upscale_steps": upscale_steps,
             "upscale_denoise": upscale_denoise, "ref_image_size": ref_image_size, "seeds": seeds_per_arm,
             "keystone": bool(keystone), "attention": attention, "shift": float(shift), "audio_shift": float(audio_shift),
+            "refmod_pictures": refmod_pictures,
         }
         extra = extra if isinstance(extra, dict) else {}
         if (extra.get("h3royale_base") or {}).get("exact"):  # a run started from a take that had an exact size

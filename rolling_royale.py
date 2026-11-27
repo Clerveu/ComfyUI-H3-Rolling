@@ -33,6 +33,10 @@ What a line can change
                                           (a RefMod from the stack wired into mods, by its place in the stack or by
                                            name: refmod mira look = 0.6. Up to 1 is strength, above 1 adds copies,
                                            0 or off leaves it out. Without look / voice the line sets both.)
+  refmod pictures = every 4th | all       (how many pictures of a RefMod made from several H3's text encoder is shown;
+                                           the model itself always gets all of them)
+  encoder = int8 | nvfp4                  (the H3 text encoder file, any unique part of its name; the baseline's is the
+                                           one wired into the node)
   seeds = 3                               (this arm's own number of seeds)
   a = some words                          (what goes where {a} is in the prompt or storyboard; b, c ... too)
 
@@ -189,6 +193,13 @@ def apply_change(S, key, value, unets, loras, slots):
         if slot["on"] and slot["file"] in ("", "none"):
             raise ValueError(f"lora {i + 1} is on and has no file (pick one on the node, or  lora {i + 1} file = ...)")
         return
+    if key in ("refmod pictures", "refmod stack pictures", "stack pictures"):
+        S["refmod_pictures"] = _stack_pictures(value)
+        return
+    if key in ("encoder", "text encoder"):
+        import folder_paths
+        S["encoder"] = _match(value, folder_paths.get_filename_list("text_encoders"), "text encoder")
+        return
     m = re.fullmatch(r"refmod (\S+?)(?: (look|voice))?", key)
     if m:
         rolling_refmods.change(S.get("refmods") or [], m.group(1), m.group(2), value)
@@ -253,6 +264,36 @@ def apply_change(S, key, value, unets, loras, slots):
 
 
 ATTENTIONS = ("default", "comfy kitchen")
+STACK_PICTURES = ("every 4th", "all")
+# The encoder every run before 11-27 used. A piece made with it has no encoder in its cache fingerprint, so
+# those pieces are still found; any other encoder is named in the fingerprint.
+USUAL_ENCODER = "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
+
+
+def _stack_pictures(value):
+    v = " ".join(str(value).lower().split())
+    if v in ("every 4th", "4th", "every fourth", "default"):
+        return "every 4th"
+    if v in ("all", "every", "every one"):
+        return "all"
+    raise ValueError("refmod pictures is  every 4th  or  all")
+
+
+def wired_encoder(job):
+    """The file name in the text encoder loader wired into the Royale node, from the job as queued ('' if it
+    can't be told)."""
+    try:
+        g = job["prompt"]
+        src = g[str(job["node_id"])]["inputs"]["clip"][0]
+        return str(g[str(src)]["inputs"].get("clip_name") or "")
+    except (KeyError, IndexError, TypeError):
+        return ""
+
+
+def short_encoder(name):
+    return os.path.splitext(os.path.basename(name or ""))[0].replace("qwen3vl_32b_minimax_h3_", "") or "(wired)"
+
+
 SHIFTS = (12.0, 3.0)  # H3's own video and audio shift (comfy/supported_models.py); at these the model is left as loaded
 
 
@@ -330,6 +371,10 @@ def diff_lines(S, base):
         if float(S.get(key, own)) != float(base.get(key, own)):
             out.append(f"{word} {float(S.get(key, own)):g}")
     out += rolling_refmods.diff(S.get("refmods"), base.get("refmods"))
+    if S.get("refmod_pictures", "every 4th") != base.get("refmod_pictures", "every 4th"):
+        out.append(f"encoder shown {S.get('refmod_pictures')} RefMod picture" + ("s" if S.get("refmod_pictures") == "all" else ""))
+    if S.get("encoder", "") != base.get("encoder", ""):
+        out.append(f"encoder {short_encoder(S.get('encoder'))}")
     for k in sorted(S["slots"]):
         if S["slots"][k] != base["slots"].get(k, ""):
             out.append(f"{{{k}}}: {S['slots'][k] or '(empty)'}")
@@ -432,6 +477,8 @@ def run_royale(clip, vae, audio_vae, prompt, storyboard, arms_text, base, shots,
     base.setdefault("exact", None)
     resolve_size(base)
     base.update({"slots": dict(slots), "slot_changed": False, "seeds_set": False})
+    base["refmod_pictures"] = _stack_pictures(base.get("refmod_pictures") or "every 4th")
+    base["encoder"] = wired_encoder(job)
     mod_groups = rolling_refmods.groups(mods)
     base["refmods"] = rolling_refmods.state(mod_groups)
     for r in base["refmods"]:
@@ -511,7 +558,7 @@ def run_royale(clip, vae, audio_vae, prompt, storyboard, arms_text, base, shots,
     for i, c in enumerate(chains):
         first_of.setdefault(c[0], i)
     for ch in sorted(chains, key=lambda c: (first_of[c[0]], chains.index(c))):
-        order += [a for a in arms[1:] if a["chain"] == ch]
+        order += sorted([a for a in arms[1:] if a["chain"] == ch], key=lambda a: a["S"].get("encoder", ""))
     plan = (f"baseline {base['width']}x{base['height']}" + ("" if base.get("exact") else f" ({base['aspect'].split(' ')[0]}, {base['mp']:g} MP)") + "\n"
             f"{len(arms)} arms, {takes_total} takes, {len(chains)} model chain(s). Rough ceiling ~{_hms(est_total)} "
             f"({'from ' + str(k_n) + ' earlier takes here' if k_n else 'from the October bench numbers; it tunes itself after the first run'}; "
@@ -552,6 +599,30 @@ def run_royale(clip, vae, audio_vae, prompt, storyboard, arms_text, base, shots,
     _write(mpath, man)
 
     model_cache = {"unet": None, "base": None, "chain": None, "model": None}
+    clip_cache = {"name": None, "clip": None}
+
+    def clip_for(S):
+        """The text encoder this arm asks for: the wired one unless its line names another file."""
+        name = S.get("encoder") or ""
+        if not name or name == base["encoder"]:
+            return clip
+        if clip_cache["name"] != name:
+            clip_cache["clip"] = clip_cache["name"] = None   # let go of the last one before the next loads
+            gc.collect()
+            mm.soft_empty_cache()
+            print(f"{TAG} loading text encoder {name}")
+            clip_cache["clip"] = nodes.CLIPLoader().load_clip(name, "minimax", "default")[0]
+            clip_cache["name"] = name
+        return clip_cache["clip"]
+
+    def cond_tag(S):
+        """What goes into the piece cache's fingerprint beyond the usual: see run_timeline."""
+        tag = []
+        if S.get("encoder") and S["encoder"] != USUAL_ENCODER:
+            tag.append(["encoder", S["encoder"]])
+        if S.get("refmod_pictures", "every 4th") != "every 4th":
+            tag.append(["refmod pictures", S["refmod_pictures"]])
+        return tag or None
 
     def model_for(S):
         ch = chain_of(S)
@@ -599,7 +670,7 @@ def run_royale(clip, vae, audio_vae, prompt, storyboard, arms_text, base, shots,
                     model = with_shift(model_for(S), S)
                     tl, p_text, solo, notes = timeline_for(S, take_seed)
                     frames, _, take_plan = rolling_timeline.run_timeline(
-                        model, clip, vae, audio_vae, tl, p_text, "", round(S["shot_seconds"] * rolling_core.FPS),
+                        model, clip_for(S), vae, audio_vae, tl, p_text, "", round(S["shot_seconds"] * rolling_core.FPS),
                         round(S["bridge_seconds"] * rolling_core.FPS), S["width"], S["height"], S["steps"],
                         S["sampler"], S["scheduler"], take_seed, S["ref_image_size"], pin_mode="mask",
                         soundtrack=soundtrack, upscale_pass=S["upscale"], upscale_megapixels=S["upscale_mp"],
@@ -608,7 +679,8 @@ def run_royale(clip, vae, audio_vae, prompt, storyboard, arms_text, base, shots,
                         solo=solo, extra_notes=notes, hold=HOLDS[S["hold"]],
                         piece_cache=False if a["control"] else None, stream_to=os.path.join(folder, name), report=rep,
                         keystone=S["keystone"],
-                        mods=rolling_refmods.rows(mod_groups, S["refmods"]) if mods is not None else None)
+                        mods=rolling_refmods.rows(mod_groups, S["refmods"]) if mods is not None else None,
+                        stack_pictures=S.get("refmod_pictures", "every 4th"), cond_tag=cond_tag(S))
                     del frames
                     secs = time.time() - t0
                     try:  # a small copy for the page's grid; the page falls back to the full file without it
@@ -640,6 +712,7 @@ def run_royale(clip, vae, audio_vae, prompt, storyboard, arms_text, base, shots,
         man["finished"] = time.time()
         _write(mpath, man, patience=60.0)
         model_cache.clear()
+        clip_cache.clear()
 
     lines = []
     for a in arms:

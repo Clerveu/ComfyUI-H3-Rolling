@@ -347,7 +347,12 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
                  upscale_pass=False, upscale_megapixels=1.5, upscale_steps=2, upscale_denoise=0.4,
                  frame_labels=False, pictures=(), ref_video=None, ref_audio=None, sampler=None, sigmas=None,
                  solo=None, extra_notes=(), hold=(PIN, 0), piece_cache=None, stream_to=None, report=None,
-                 keystone=False, mods=None):
+                 keystone=False, mods=None, stack_pictures="every 4th", cond_tag=None):
+    # stack_pictures: how many pictures of a RefMod made from several the text encoder is shown ("every 4th" is
+    # the pack's own default, "all" is every one). The model itself always gets all of them.
+    # cond_tag: anything else about the conditioning that makes a piece a different piece (a text encoder other
+    # than the usual one, stack_pictures other than the default). It goes into every piece's cache fingerprint;
+    # None leaves fingerprints as they have always been.
     # mods: a RefMod bundle (rolling_refmods). None = Comfy's own Reference to Video encodes every piece, as
     # always. A bundle, even an empty one, = the Fantastic pack's RefMod Text Encode does, so an arm with its
     # RefMods switched off is encoded the same way as the arms it is compared with.
@@ -576,6 +581,8 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
               still_from if p["still"] else None]
         if mod_ids is not None:
             lo += ["refmods", mod_ids]
+        if cond_tag:
+            lo += ["cond", cond_tag]
         if i % 2:
             lo += [pin_of(i), fps[i - 1][0], fps[i + 1][0]] + ([pieces[i + 1]["lead"]] if pieces[i + 1]["lead"] else [])
             if (p["hold"], p["drop"]) != (PIN, 0):
@@ -610,6 +617,7 @@ def run_timeline(model, clip, vae, audio_vae, timeline, prompt, beat, shot_frame
             cond, ref_map, latent = refmod_encoder.encode(
                 clip, with_still(p["text"], still_tag), width=w, height=h, length=p["render"],
                 ref_image_size=ref_image_size, mods=list(mods), vae=vae, audio_vae=audio_vae,
+                stack_pictures="all" if stack_pictures == "all" else "every 4th",
                 references={"pictures": images, "videos": [video] if video is not None else [], "video_audios": [],
                             "audios": [ref_audio] if p["audio"] else []})
             if not p.get("map_shown"):
