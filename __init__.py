@@ -512,7 +512,26 @@ class H3RollingRoyale:
         return {"ui": {"text": [report]}, "result": (report, folder)}
 
 
+class H3Notes:
+    """A plain text box for notes. Its words are kept in a file in Comfy's user folder (h3_notes.txt) by
+    web/h3_notes.js, not in the workflow, so they are the same in every workflow and survive one being rebuilt
+    or never saved. Does nothing when a job runs."""
+
+    CATEGORY = "MiniMax H3/rolling"
+    RETURN_TYPES = ()
+    FUNCTION = "run"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"notes": ("STRING", {"multiline": True, "default": "",
+                                                   "tooltip": "Kept outside the workflow: the same notes wherever this node is, saved as you type."})}}
+
+    def run(self, notes=""):
+        return ()
+
+
 NODE_CLASS_MAPPINGS = {
+    "H3Notes": H3Notes,
     "H3RollingSource": H3RollingSource,
     "H3RollingPicture": H3RollingPicture,
     "H3RollingRef2VA": H3RollingRef2VA,
@@ -520,6 +539,7 @@ NODE_CLASS_MAPPINGS = {
     "H3RollingRoyale": H3RollingRoyale,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
+    "H3Notes": "H3 Notes (kept outside the workflow)",
     "H3RollingSource": "H3 Rolling Source (scrub)",
     "H3RollingPicture": "H3 Rolling Picture (may be empty)",
     "H3RollingRef2VA": "H3 Rolling Ref2VA",

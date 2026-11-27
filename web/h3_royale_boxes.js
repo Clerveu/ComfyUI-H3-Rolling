@@ -3,7 +3,7 @@
 // For the Vue node renderer (Comfy.VueNodes.Enabled), where a node is page layout and sizes to what is in it.
 import { app } from "../../scripts/app.js";
 
-const TYPES = new Set(["H3RollingRoyale"]);
+const TYPES = new Set(["H3RollingRoyale", "H3Notes"]);
 const KEY = "h3_box_heights";   // node.properties[KEY] = [prompt px, storyboard px, arms px]
 const MIN = 64;
 

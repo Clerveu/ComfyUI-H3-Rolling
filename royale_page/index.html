@@ -755,6 +755,11 @@ async function jobToWorkflow(job) {
     const cur = await (await fetch(`/userdata/${encodeURIComponent("workflows/" + WF_NAME + ".json")}`)).json();
     let next = Math.max(...all.map((n) => n.id));
     for (const n of (cur.nodes || [])) if (n.type === "MarkdownNote") all.push({ ...n, id: ++next, order: order++, inputs: [], outputs: [] });
+    // the notes box keeps its words in a file of its own (web/h3_notes.js), so an empty one here fills itself in
+    const had = (cur.nodes || []).find((n) => n.type === "H3Notes");
+    all.push({ id: ++next, type: "H3Notes", pos: had ? had.pos : [1880, top], size: had ? had.size : [640, 900], flags: {}, order: order++, mode: 0,
+      inputs: [], outputs: [], properties: { "Node name for S&R": "H3Notes", ...(had && had.properties && had.properties.h3_box_heights ? { h3_box_heights: had.properties.h3_box_heights } : {}) },
+      widgets_values: [""], title: "Notes" });
   } catch (e) {}
   const hex = (n) => [...Array(n)].map(() => Math.floor(Math.random() * 16).toString(16)).join("");
   return { id: `${hex(8)}-${hex(4)}-4${hex(3)}-a${hex(3)}-${hex(12)}`, revision: 0, last_node_id: Math.max(...all.map((n) => n.id)), last_link_id: lid,
