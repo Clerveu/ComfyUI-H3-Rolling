@@ -162,6 +162,7 @@
   <div id="abtop">
     <button id="abmode" class="abonly">Flip in place (F)</button>
     <button id="abswap" class="abonly" style="display:none">Show the other (F)</button>
+    <label class="abonly legend" title="On: < > only visit takes made on the kept side's seed, so every arm is compared with its own baseline. Past the last one it moves on to the next seed and, if the kept side is a baseline, brings that seed's baseline in with it. Off: < > visit every take."><input type="checkbox" id="abseed"> same seed</label>
     <span class="legend abonly">&#128274; = the side that stays (L swaps it). &lt; &gt; or &uarr; &darr; change the other side. Click a side to hear it.</span>
     <span id="rvpos" class="legend rvonly"></span>
     <button id="abclose" style="margin-left:auto">Close (Esc)</button>
@@ -611,7 +612,27 @@ function rateBox(key, nav) {
 // one that changes: its < > buttons, the up / down arrows, or a click on a take all load a new take into it
 // without touching the kept side's player. abHeard is the side whose sound plays when they are side by side.
 let abLock = 0, abHeard = 0;
-const abOthers = () => rvOrder().filter((k) => k !== sel[abLock]);
+// abSeed: < > stay on the kept side's seed. A settings arm is the same take nudged, so the only fair thing to
+// put beside it is the baseline made on the same seed; across seeds you are mostly comparing luck.
+let abSeed = true;
+try { abSeed = localStorage.getItem("royale.abseed") !== "0"; } catch (e) {}
+const seedOf = (k) => cells[k] && cells[k].take.seed;
+const abOthers = (kept = sel[abLock]) => rvOrder().filter((k) => k !== kept && (!abSeed || seedOf(k) === seedOf(kept)));
+// Where < (d = -1) or > (d = 1) takes the side that changes: {k} = that take, or, past the end of a seed with
+// the kept side on a baseline, {kept, k} = the next seed's baseline for the kept side and that seed's first
+// (or last) other take. null = nowhere to go.
+function abTarget(d) {
+  if (sel.length < 2) return null;
+  const ks = abOthers(), at = ks.indexOf(sel[1 - abLock]);
+  const k = at < 0 ? (d > 0 ? ks[0] : ks[ks.length - 1]) : ks[at + d];
+  if (k) return { k };
+  const c = cells[sel[abLock]];
+  if (!abSeed || !c || c.arm.n !== 0) return null;
+  const bases = rvOrder().filter((x) => cells[x].arm.n === 0), kept = bases[bases.indexOf(sel[abLock]) + d];
+  if (!kept) return null;
+  const next = abOthers(kept);
+  return next.length ? { kept, k: d > 0 ? next[0] : next[next.length - 1] } : null;
+}
 function abPlayer(k, i) {
   const v = document.createElement("video"); v.src = cells[k].video.dataset.full; v.muted = true; v.playsInline = true; v.preload = "auto"; v.dataset.ab = "1";
   v.onclick = () => { if (!abFlip) { abHeard = i; applySound(); } };
@@ -625,7 +646,7 @@ function dressPane(pane, i) {
   cap.innerHTML = `<b>${"AB"[i]}</b> ${esc(label(k))}<button class="lock${kept ? " on" : ""}" title="${kept ? "This side stays while you step through the other (L swaps which side stays)" : "Keep this side and step through the other instead (L)"}">${kept ? "&#128274; stays" : "&#128275;"}</button><span class="ear" title="This side's sound is the one playing">&#128266;</span>`;
   cap.querySelector(".lock").onclick = () => setLock(i);
   let nav = null;
-  if (!kept) { const ks = abOthers(), at = ks.indexOf(k); nav = { prev: at > 0 ? () => abStep(-1) : null, next: at < ks.length - 1 ? () => abStep(1) : null }; }
+  if (!kept) nav = { prev: abTarget(-1) ? () => abStep(-1) : null, next: abTarget(1) ? () => abStep(1) : null };
   pane.prepend(cap); pane.appendChild(rateBox(k, nav));
 }
 function setLock(i) { abLock = i; document.querySelectorAll("#abstage .pane").forEach((p, j) => dressPane(p, j)); }
@@ -641,8 +662,14 @@ function setPane(i, k) {
 }
 function abStep(d) {
   if (!abOpen() || rvKey || sel.length < 2) return;
-  const i = 1 - abLock, ks = abOthers(), k = ks[ks.indexOf(sel[i]) + d];
-  if (k) setPane(i, k);
+  const t = abTarget(d); if (!t) return;
+  if (t.kept) setPane(abLock, t.kept);      // rolling over: the next seed's baseline comes in on the kept side
+  setPane(1 - abLock, t.k);
+}
+function setAbSeed(on) {
+  abSeed = !!on; $("abseed").checked = abSeed;
+  try { localStorage.setItem("royale.abseed", abSeed ? "1" : "0"); } catch (e) {}
+  document.querySelectorAll("#abstage .pane").forEach((pn, j) => { if (!rvKey && sel.length === 2) dressPane(pn, j); });
 }
 function openAB() {
   if (sel.length < 2) { $("status").textContent = "Click two takes first, then A / B."; return; }
@@ -956,6 +983,7 @@ $("vol").oninput = (e) => setSound({ vol: +e.target.value, off: false });
 $("vol").onchange = (e) => e.target.blur();
 $("abopen").onclick = openAB; $("abclose").onclick = closeAB; $("abswap").onclick = flip;
 $("rvopen").onclick = () => openRV(lastHeard || sel[0]);
+$("abseed").checked = abSeed; $("abseed").onchange = (e) => { setAbSeed(e.target.checked); e.target.blur(); };
 $("abmode").onclick = () => { abFlip = !abFlip; abShow = 0; openAB(); };
 let dragging = false;
 const scrubTo = (e) => { const r = $("scrub").getBoundingClientRect(); gotoFrame(Math.round(Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) * total() * fps())); };
