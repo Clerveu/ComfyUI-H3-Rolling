@@ -147,6 +147,7 @@
       <input id="tnames" placeholder="look, follows prompt, hands"></label>
     <label title="A row of 0 to 10 under every take, for a broad how-good-is-it. The map can be coloured by it: red at 0 through to blue at 10."><input type="checkbox" id="scoreon"> 0-10 score</label>
     <button id="maptoggle">Map</button>
+    <button id="export" title="Copy every take's settings, thumbs, score and note as text, to paste to Mira">Copy ratings</button>
     <span id="mapctl">
       colour by <span id="mapby"></span>
       &nbsp; across <select id="mapx"></select> down <select id="mapy"></select>
@@ -455,6 +456,34 @@ function axes() {
   if (vary.some((x) => x.k === "mp" || x.k === "aspect")) vary = vary.filter((x) => x.k !== "size");
   vary.sort((a, b) => b.n - a.n);
   return { fl, vary: vary.map((x) => x.k) };
+}
+// Every take's ratings as text for pasting into a chat: a few header lines, then one tab-separated row per
+// take with only the settings that differ between arms. Thumbs are + (up), - (down) or empty.
+function ratingsText() {
+  const { fl, vary } = axes(), nm = names(), sc = scoreOn();
+  const cols = ["arm", "seed", ...vary, ...nm.map((n) => "thumb:" + n), ...(sc ? ["score"] : []), "note", "status"];
+  const rows = [];
+  man.arms.forEach((a, ai) => a.takes.forEach((t, r) => {
+    const v = votes[`${a.n}-${r}`] || {};
+    rows.push([a.n, t.seed, ...vary.map((k) => show(fl[ai][k])), ...nm.map((n) => ({ up: "+", down: "-" })[(v.thumbs || {})[n]] || ""),
+      ...(sc ? [Number.isInteger(v.score) ? v.score : ""] : []), String(v.note || "").replace(/\s+/g, " ").trim(), t.status].join("\t"));
+  }));
+  return [`ROYALE RATINGS run ${man.id}`, `arms ${man.arms.length}, takes ${rows.length}, arm 0 = baseline`,
+    `thumbs: ${nm.join(", ")} (+ up, - down, empty = not rated)` + (sc ? "; score 0-10, empty = not rated" : "; no score"),
+    `arms box: ${JSON.stringify(man.arms_box || "")}`, `baseline: ${JSON.stringify(flat(man.arms[0].settings))}`,
+    cols.join("\t"), ...rows].join("\n");
+}
+// The page is served over plain http on the LAN, where the browser's newer clipboard call isn't allowed, so
+// the text goes through a hidden box and the old copy command first.
+async function copyRatings() {
+  const text = ratingsText(), ta = document.createElement("textarea");
+  ta.value = text; ta.style.cssText = "position:fixed; left:-9999px; top:0"; document.body.appendChild(ta); ta.select();
+  let ok = false; try { ok = document.execCommand("copy"); } catch (e) {}
+  ta.remove();
+  if (!ok && navigator.clipboard) ok = await navigator.clipboard.writeText(text).then(() => true, () => false);
+  const n = man.arms.reduce((x, a) => x + a.takes.length, 0);
+  if (ok) say(`Copied the ratings for ${n} takes (${text.length.toLocaleString()} characters). Paste them to Mira.`);
+  else { say("The browser wouldn't copy, so the ratings are in a box: copy from there.", true); window.prompt("Ratings (Ctrl+A, Ctrl+C):", text); }
 }
 function axisValues(fl, k) {
   const vals = [...new Set(fl.map((f) => show(f[k])))];
@@ -962,6 +991,7 @@ $("runs").onchange = (e) => openRun(e.target.value);
 $("tnames").onchange = (e) => setNames(e.target.value);
 $("tnames").onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter" || e.key === "Escape") e.target.blur(); };
 $("scoreon").onchange = (e) => { e.target.blur(); setScoreOn(e.target.checked); };
+$("export").onclick = copyRatings;
 $("maptoggle").onclick = () => { try { localStorage.setItem("royale.map", localStorage.getItem("royale.map") === "0" ? "1" : "0"); } catch (e) {} drawMap(); };
 $("mapx").onchange = (e) => { mapX = e.target.value; drawMap(); };
 $("mapy").onchange = (e) => { mapY = e.target.value; drawMap(); };
