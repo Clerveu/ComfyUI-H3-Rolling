@@ -198,7 +198,9 @@ def apply_change(S, key, value, unets, loras, slots):
         return
     if key in ("encoder", "text encoder"):
         import folder_paths
-        S["encoder"] = _match(value, folder_paths.get_filename_list("text_encoders"), "text encoder")
+        every = folder_paths.get_filename_list("text_encoders")
+        # only H3's own readers are candidates (other models' encoders share words like int8), unless none are named so
+        S["encoder"] = _match(value, [x for x in every if "h3" in x.lower()] or every, "text encoder")
         return
     m = re.fullmatch(r"refmod (\S+?)(?: (look|voice))?", key)
     if m:
