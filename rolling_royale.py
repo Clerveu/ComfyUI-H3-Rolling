@@ -742,6 +742,9 @@ def run_royale(clip, vae, audio_vae, prompt, storyboard, arms_text, base, shots,
                 except Exception as e:
                     take.update({"status": "failed", "error": f"{type(e).__name__}: {e}", "seconds": round(time.time() - t0, 1)})
                     print(f"{TAG} arm {a['n']} seed {take_seed} failed: {type(e).__name__}: {e}")
+                    import traceback
+                    print(f"{TAG} where it failed:
+" + "".join(traceback.format_exc().splitlines(True)[-24:]))
                 done += 1
                 _write(mpath, man)
         man["status"] = "done"
