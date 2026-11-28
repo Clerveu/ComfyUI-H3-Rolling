@@ -351,12 +351,6 @@ def chain_of(S):
             lora_audio_of(S))
 
 
-# Video memory left free while a 'lora audio' arm renders. The Modality loader adds each LoRA's part as its own
-# working tensor beside every layer's output (rows x width: 1.7 GB on a 20,000-row sequence), which Comfy's
-# memory manager doesn't count. Without the room a take ran out of memory and took the server down (11-28).
-LORA_AUDIO_HEADROOM = 4 * 1024 ** 3
-
-
 def modality_loras(model, chain_loras, audio):
     """The LoRAs applied by the H3 Modality LoRA Loader's own code: all of each on the picture and the words,
     `audio` of each on the sound. They go on as wrappers around the model's layers, not as weight patches."""
@@ -713,8 +707,6 @@ def run_royale(clip, vae, audio_vae, prompt, storyboard, arms_text, base, shots,
                 print(f"{TAG} take {done + 1}/{takes_total}: arm {a['n']} ({' | '.join(a['diff']) or 'baseline'}), seed {take_seed}")
                 t0 = time.time()
                 rep = {}
-                headroom = LORA_AUDIO_HEADROOM if chain_of(S)[3] != 1.0 else 0
-                mm.EXTRA_RESERVED_VRAM += headroom
                 try:
                     model = with_shift(model_for(S), S)
                     tl, p_text, solo, notes = timeline_for(S, take_seed)
@@ -749,8 +741,6 @@ def run_royale(clip, vae, audio_vae, prompt, storyboard, arms_text, base, shots,
                 except Exception as e:
                     take.update({"status": "failed", "error": f"{type(e).__name__}: {e}", "seconds": round(time.time() - t0, 1)})
                     print(f"{TAG} arm {a['n']} seed {take_seed} failed: {type(e).__name__}: {e}")
-                finally:
-                    mm.EXTRA_RESERVED_VRAM -= headroom
                 done += 1
                 _write(mpath, man)
         man["status"] = "done"
