@@ -492,6 +492,30 @@ def _write(path, data, patience=6.0):
     return False
 
 
+def _debug():
+    """royale_debug.json beside this file, if there is one (not in the repo): switches for chasing a problem.
+    {"args": {a Comfy launch flag: value}} sets those flags for the takes of 'lora audio' arms ("all": true = for
+    every take) and puts them back after; {"mem": true} prints the card's memory before each take."""
+    try:
+        with open(os.path.join(os.path.dirname(__file__), "royale_debug.json"), encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def _set_args(values, quiet=False):
+    """Set Comfy launch flags (comfy.cli_args.args) and return what they were, to hand back here afterwards."""
+    if not values:
+        return None
+    from comfy.cli_args import args
+    was = {k: getattr(args, k) for k in values if hasattr(args, k)}
+    for k in was:
+        setattr(args, k, values[k])
+    if not quiet:
+        print(f"{TAG} debug: Comfy flags for this take: {values}" + ("" if len(was) == len(values) else f" (known: {sorted(was)})"))
+    return was
+
+
 def run_royale(clip, vae, audio_vae, prompt, storyboard, arms_text, base, shots, seed, soundtrack, frame_labels,
                mode, pictures, ref_video=None, ref_audio=None, job=None, origin=None, mods=None, refmod_weights=None):
     # mods: a RefMod bundle from a RefMod Stack (rolling_refmods). refmod_weights: the weights a run started
@@ -708,6 +732,13 @@ def run_royale(clip, vae, audio_vae, prompt, storyboard, arms_text, base, shots,
                 print(f"{TAG} take {done + 1}/{takes_total}: arm {a['n']} ({' | '.join(a['diff']) or 'baseline'}), seed {take_seed}")
                 t0 = time.time()
                 rep = {}
+                dbg = _debug()
+                was_args = _set_args(dbg.get("args") if (chain_of(S)[3] != 1.0 or dbg.get("all")) else None)
+                if dbg.get("mem"):
+                    import torch
+                    free, total = torch.cuda.mem_get_info()
+                    print(f"{TAG} debug mem before take: card free {free / 2**30:.2f} GiB, torch allocated "
+                          f"{torch.cuda.memory_allocated() / 2**30:.2f}, reserved {torch.cuda.memory_reserved() / 2**30:.2f}")
                 try:
                     model = with_shift(model_for(S), S)
                     tl, p_text, solo, notes = timeline_for(S, take_seed)
@@ -745,6 +776,8 @@ def run_royale(clip, vae, audio_vae, prompt, storyboard, arms_text, base, shots,
                     import traceback
                     print(f"{TAG} where it failed:")
                     print("".join(traceback.format_exc().splitlines(True)[-24:]))
+                finally:
+                    _set_args(was_args, quiet=True)
                 done += 1
                 _write(mpath, man)
         man["status"] = "done"
