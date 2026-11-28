@@ -20,7 +20,8 @@ What a line can change
   model = <name or a unique part of it>
   lora N = on | off | <strength>          lora N strength = 0.8          lora N file = <name or part>
   lora audio = 0 | 0.3 | 1                (how much of the arm's LoRAs reaches the sound; the picture always gets all of
-                                           them. 1 = the usual way. Anything else needs the H3 Modality LoRA Loader pack)
+                                           them. 1 = the usual way. Anything else needs the H3 Modality LoRA Loader pack.
+                                           The baseline's is the node's lora_audio)
   steps = 8        sampler = euler        scheduler = simple
   mp = 0.6                                (megapixels; the size is worked out from mp and aspect, as on the node)
   aspect = 9:16                           (any unique part of an aspect ratio's name)

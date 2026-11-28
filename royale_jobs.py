@@ -72,6 +72,7 @@ def build_job(job, manifest, arm_n, take_i, what, arms_text="", mode="run"):
     i["attention"] = S.get("attention", "default")
     i["shift"], i["audio_shift"] = float(S.get("shift", 12.0)), float(S.get("audio_shift", 3.0))
     i["refmod_pictures"] = S.get("refmod_pictures", "every 4th")
+    i["lora_audio"] = float(S.get("lora_audio", 1.0))
     if S.get("encoder"):  # the take's text encoder goes into the loader that is wired to the node
         try:
             graph[str(i["clip"][0])]["inputs"]["clip_name"] = S["encoder"]

@@ -477,6 +477,13 @@ class H3RollingRoyale:
                 "and works out who is who) is shown. every 4th: the first and every fourth after it, so one picture of a "
                 "three-picture RefMod (the pack's default, and what every run before 11-27 used). all: every picture; a "
                 "little slower. The model itself always gets all of them. An arm can say refmod pictures = every 4th | all.")}),
+            "lora_audio": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.05, "tooltip": (
+                "How much of the LoRAs reaches the sound. 1: the usual way, picture and sound alike. 0: the LoRAs shape the "
+                "picture and stay off the sound, so a LoRA trained on clips with one voice in them stops pulling every seed "
+                "to that voice. In between: that fraction. One number for all four slots. Anything other than 1 uses the "
+                "H3 Modality LoRA Loader pack and is a few seconds slower a take. With a RefMod at 3 copies it has run out "
+                "of video memory and taken Comfy down (11-28, twice); at 1 copy it renders. An arm can say "
+                "lora audio = 0 | 0.3 | 1.")}),
         })
         optional = {f"picture_{i}": ("IMAGE", {"tooltip": f"image {i} in the storyboard, <Picture {i}> in the prompt"})
                     for i in range(1, 10)}
@@ -492,7 +499,7 @@ class H3RollingRoyale:
             shot_seconds, bridge_seconds, aspect_ratio, megapixels, seed, seeds_per_arm, ref_image_size, soundtrack,
             upscale_pass, upscale_megapixels, upscale_steps, upscale_denoise, frame_labels, bridge_hold, mode,
             keystone=False, attention="default", shift=12.0, audio_shift=3.0, refmod_pictures="every 4th",
-            ref_video=None, ref_audio=None, mods=None,
+            lora_audio=1.0, ref_video=None, ref_audio=None, mods=None,
             job_graph=None, node_id=None,
             extra=None, **kw):
         from . import storyboard as storyboard_mod
@@ -507,7 +514,7 @@ class H3RollingRoyale:
             "upscale": upscale_pass, "upscale_mp": upscale_megapixels, "upscale_steps": upscale_steps,
             "upscale_denoise": upscale_denoise, "ref_image_size": ref_image_size, "seeds": seeds_per_arm,
             "keystone": bool(keystone), "attention": attention, "shift": float(shift), "audio_shift": float(audio_shift),
-            "refmod_pictures": refmod_pictures,
+            "refmod_pictures": refmod_pictures, "lora_audio": float(lora_audio),
         }
         extra = extra if isinstance(extra, dict) else {}
         if (extra.get("h3royale_base") or {}).get("exact"):  # a run started from a take that had an exact size
