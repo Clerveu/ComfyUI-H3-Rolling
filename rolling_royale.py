@@ -352,6 +352,15 @@ def chain_of(S):
             lora_audio_of(S))
 
 
+# Comfy launch flags set for the length of a 'lora audio' take and put back after. With Comfy's model compiler
+# (the allocation graph that logs "graph breaks / rogues") on, a take with the Modality loader's wrappers and a long
+# sequence (a RefMod at 3 copies, about 10.6k reference tokens) failed in the model's own int8_linear output
+# allocation, "would exceed allowed memory" asking for 1.74 GiB with 3.5 GiB free, and the Comfy process then
+# exited: five times out of five on 11-28. With the compiler off for the take it rendered, 97 s against 90 s for
+# the same LoRA the usual way. disable_cuda_graphs alone did not help.
+LORA_AUDIO_FLAGS = {"disable_comfy_compiler": True}
+
+
 def modality_loras(model, chain_loras, audio):
     """The LoRAs applied by the H3 Modality LoRA Loader's own code: all of each on the picture and the words,
     `audio` of each on the sound. They go on as wrappers around the model's layers, not as weight patches."""
@@ -733,7 +742,10 @@ def run_royale(clip, vae, audio_vae, prompt, storyboard, arms_text, base, shots,
                 t0 = time.time()
                 rep = {}
                 dbg = _debug()
-                was_args = _set_args(dbg.get("args") if (chain_of(S)[3] != 1.0 or dbg.get("all")) else None)
+                flags = dict(LORA_AUDIO_FLAGS) if chain_of(S)[3] != 1.0 else {}
+                if chain_of(S)[3] != 1.0 or dbg.get("all"):
+                    flags.update(dbg.get("args") or {})
+                was_args = _set_args(flags, quiet=not dbg)
                 if dbg.get("mem"):
                     import torch
                     free, total = torch.cuda.mem_get_info()
