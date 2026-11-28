@@ -19,6 +19,8 @@ The arms box
 What a line can change
   model = <name or a unique part of it>
   lora N = on | off | <strength>          lora N strength = 0.8          lora N file = <name or part>
+  lora audio = 0 | 0.3 | 1                (how much of the arm's LoRAs reaches the sound; the picture always gets all of
+                                           them. 1 = the usual way. Anything else needs the H3 Modality LoRA Loader pack)
   steps = 8        sampler = euler        scheduler = simple
   mp = 0.6                                (megapixels; the size is worked out from mp and aspect, as on the node)
   aspect = 9:16                           (any unique part of an aspect ratio's name)
@@ -193,6 +195,15 @@ def apply_change(S, key, value, unets, loras, slots):
         if slot["on"] and slot["file"] in ("", "none"):
             raise ValueError(f"lora {i + 1} is on and has no file (pick one on the node, or  lora {i + 1} file = ...)")
         return
+    if key in ("lora audio", "loras audio", "lora sound"):
+        try:
+            v = float(value)
+        except ValueError:
+            raise ValueError("lora audio is a number: 0 keeps the LoRAs off the sound, 1 is the usual way")
+        if not 0 <= v <= 5:
+            raise ValueError("lora audio is between 0 and 5")
+        S["lora_audio"] = v
+        return
     if key in ("refmod pictures", "refmod stack pictures", "stack pictures"):
         S["refmod_pictures"] = _stack_pictures(value)
         return
@@ -327,9 +338,29 @@ def _attention(value):
     raise ValueError("attention is  kitchen  or  default")
 
 
+def lora_audio_of(S):
+    """How much of this arm's LoRAs reaches the sound: 1 = the usual way (and always 1 when no LoRA is on)."""
+    if not any(l["on"] and l["file"] not in ("", "none") for l in S["loras"]):
+        return 1.0
+    return round(float(S.get("lora_audio", 1.0)), 4)
+
+
 def chain_of(S):
     return (S["model"], tuple((l["file"], round(float(l["strength"]), 4)) for l in S["loras"]
-                              if l["on"] and l["file"] not in ("", "none")), S.get("attention", "default"))
+                              if l["on"] and l["file"] not in ("", "none")), S.get("attention", "default"),
+            lora_audio_of(S))
+
+
+def modality_loras(model, chain_loras, audio):
+    """The LoRAs applied by the H3 Modality LoRA Loader's own code: all of each on the picture and the words,
+    `audio` of each on the sound. They go on as wrappers around the model's layers, not as weight patches."""
+    import nodes
+    cls = nodes.NODE_CLASS_MAPPINGS.get("H3ModalityLoraLoader")
+    if cls is None:
+        raise ValueError("lora audio needs the H3 Modality LoRA Loader pack (ComfyUI-H3-Modality-Lora-Loader) "
+                         "in custom_nodes")
+    stack = json.dumps([{"on": True, "lora": file, "str": strength} for file, strength in chain_loras])
+    return cls().apply_stack(model, stack_data=stack, audio=float(audio), video=1.0, text=1.0)[0]
 
 
 def diff_lines(S, base):
@@ -369,6 +400,8 @@ def diff_lines(S, base):
         out.append("keystone on" if S.get("keystone") else "keystone off")
     if S.get("attention", "default") != base.get("attention", "default"):
         out.append(f"{S.get('attention', 'default')} attention")
+    if lora_audio_of(S) != lora_audio_of(base):
+        out.append(f"LoRA audio {lora_audio_of(S):g}")
     for key, word, own in (("shift", "shift", SHIFTS[0]), ("audio_shift", "audio shift", SHIFTS[1])):
         if float(S.get(key, own)) != float(base.get(key, own)):
             out.append(f"{word} {float(S.get(key, own)):g}")
@@ -477,6 +510,7 @@ def run_royale(clip, vae, audio_vae, prompt, storyboard, arms_text, base, shots,
     if "aspect" not in base:  # an older caller that still hands over a width and a height
         base.update({"aspect": "16:9 (Widescreen)", "mp": 0.4, "exact": [base.pop("width"), base.pop("height")]})
     base.setdefault("exact", None)
+    base["lora_audio"] = float(base.get("lora_audio", 1.0))
     resolve_size(base)
     base.update({"slots": dict(slots), "slot_changed": False, "seeds_set": False})
     base["refmod_pictures"] = _stack_pictures(base.get("refmod_pictures") or "every 4th")
@@ -624,6 +658,8 @@ def run_royale(clip, vae, audio_vae, prompt, storyboard, arms_text, base, shots,
             tag.append(["encoder", S["encoder"]])
         if S.get("refmod_pictures", "every 4th") != "every 4th":
             tag.append(["refmod pictures", S["refmod_pictures"]])
+        if lora_audio_of(S) != 1.0:  # these LoRAs are wrappers, which the model's own fingerprint only names
+            tag.append(["lora audio", lora_audio_of(S), [list(x) for x in chain_of(S)[1]]])
         return tag or None
 
     def model_for(S):
@@ -643,8 +679,11 @@ def run_royale(clip, vae, audio_vae, prompt, storyboard, arms_text, base, shots,
             model_cache["base"] = nodes.UNETLoader().load_unet(S["model"], "default")[0]
             model_cache["unet"] = S["model"]
         m = model_cache["base"]
-        for file, strength in ch[1]:
-            m = nodes.LoraLoaderModelOnly().load_lora_model_only(m, file, strength)[0]
+        if ch[3] != 1.0 and ch[1]:
+            m = modality_loras(m, ch[1], ch[3])
+        else:
+            for file, strength in ch[1]:
+                m = nodes.LoraLoaderModelOnly().load_lora_model_only(m, file, strength)[0]
         if ch[2] == "comfy kitchen":  # what the core Model Attention Backend node does for 'comfy kitchen attention'
             import comfy.ldm.modules.attention as attn
             fn = attn.get_attention_function("comfy_kitchen_int8", None)

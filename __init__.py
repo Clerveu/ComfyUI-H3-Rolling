@@ -388,10 +388,11 @@ ARMS_TIP = """The node's own settings are the baseline. Each line here is one mo
   a = locked-off tripod shot | (empty)          what goes where {a} is in the prompt or storyboard
   refmod 1 look = 0.6 | 1.0                     a RefMod from the stack wired into mods (by place or name)
   shift = 6 | 12                                where the steps are spent (12 = H3's own); audio shift = 3 | 6
+  lora audio = 0 | 0.3 | 1                      how much of the LoRAs reaches the sound (1 = the usual way)
   control                                       the baseline again with the piece cache off
   # a note
 
-Settings: model, lora N (on / off / a strength), lora N strength, lora N file, steps, sampler, scheduler,
+Settings: model, lora N (on / off / a strength), lora N strength, lora N file, lora audio, steps, sampler, scheduler,
 mp (megapixels), aspect (9:16), size (an exact 1024x576), shot seconds, bridge seconds, hold (5 / 22), upscale (on / off), upscale mp, upscale steps,
 upscale denoise, pictures (match / max), keystone, attention, shift, audio shift, encoder (the text encoder file),
 refmod pictures (every 4th / all), refmod N (on / off / a weight), refmod N look, refmod N voice,
